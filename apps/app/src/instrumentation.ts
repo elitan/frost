@@ -37,6 +37,20 @@ export async function register() {
       console.log("[startup] deployments: no stale deployments or containers");
     }
 
+    const { recoverInterruptedDatabaseImportJobs } = await import(
+      "./lib/postgres-import"
+    );
+    try {
+      const interruptedImports = await recoverInterruptedDatabaseImportJobs();
+      console.log(
+        interruptedImports > 0
+          ? `[startup] database imports: marked ${interruptedImports} interrupted job(s) as failed`
+          : "[startup] database imports: no interrupted jobs",
+      );
+    } catch (err) {
+      console.error("[startup] database imports: recovery failed", err);
+    }
+
     const { startMetricsCollector } = await import("./lib/metrics-collector");
     startMetricsCollector();
     console.log("[startup] metrics collector: started");

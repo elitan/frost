@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { nanoid } from "nanoid";
 import type {
+  AssertStorageRemovableOptions,
   BranchStorageBackend,
   BranchStorageHandle,
 } from "./branch-storage-backend";
@@ -233,6 +234,49 @@ function isDatasetNotFound(error: unknown): boolean {
   );
 }
 
+function isDependentClonesError(error: unknown): boolean {
+  const message = formatExecError("zfs", error).toLowerCase();
+  return message.includes("dependent clones");
+}
+
+/**
+ * Parses `zfs list -H -t snapshot -o name,clones` output into the clone
+ * datasets that depend on each snapshot.
+ */
+export function parseZfsSnapshotClones(
+  output: string,
+): Array<{ snapshot: string; clones: string[] }> {
+  return parseZfsNameList(output).map(function parseLine(line) {
+    const [snapshot = "", clonesValue = ""] = line.split("\t");
+    const clones =
+      clonesValue.trim() === "-" || clonesValue.trim() === ""
+        ? []
+        : clonesValue
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+    return { snapshot: snapshot.trim(), clones };
+  });
+}
+
+export function findBlockingZfsClones(input: {
+  snapshots: Array<{ snapshot: string; clones: string[] }>;
+  allowedDatasetPrefixes: string[];
+}): string[] {
+  const blocking: string[] = [];
+  for (const entry of input.snapshots) {
+    for (const clone of entry.clones) {
+      const allowed = input.allowedDatasetPrefixes.some(
+        (prefix) => clone === prefix || clone.startsWith(`${prefix}/`),
+      );
+      if (!allowed) {
+        blocking.push(clone);
+      }
+    }
+  }
+  return blocking;
+}
+
 function isAlreadyMountedError(error: unknown): boolean {
   const message = formatExecError("zfs", error).toLowerCase();
   return message.includes("already mounted");
@@ -384,7 +428,20 @@ export class ZfsBranchStorage implements BranchStorageBackend {
       throw error;
     }
 
-    await runExec(this.zfsCommand, ["destroy", "-r", backupDatasetPath]).catch(
+    // If the backup cannot be destroyed (e.g. it has dependent clones) make
+    // sure it never tries to mount over the live mountpoint again.
+    await runExec(this.zfsCommand, [
+      "set",
+      "canmount=noauto",
+      backupDatasetPath,
+    ]).catch(() => undefined);
+    await runExec(this.zfsCommand, [
+      "set",
+      "mountpoint=none",
+      backupDatasetPath,
+    ]).catch(() => undefined);
+
+    await this.destroyDatasetWithOrigin(backupDatasetPath).catch(
       () => undefined,
     );
   }
@@ -394,6 +451,75 @@ export class ZfsBranchStorage implements BranchStorageBackend {
     const mountPath = this.getMountPath(storageRef);
 
     await this.unmountDataset(datasetPath);
+    await this.destroyDatasetWithOrigin(datasetPath);
+    await rm(mountPath, { recursive: true, force: true });
+  }
+
+  async assertStorageRemovable(
+    storageRef: string,
+    options: AssertStorageRemovableOptions = {},
+  ): Promise<void> {
+    const datasetPath = this.getDatasetPath(storageRef);
+    let output: string;
+    try {
+      output = await runExec(this.zfsCommand, [
+        "list",
+        "-H",
+        "-r",
+        "-t",
+        "snapshot",
+        "-o",
+        "name,clones",
+        datasetPath,
+      ]);
+    } catch (error) {
+      if (isDatasetNotFound(error)) {
+        return;
+      }
+      throw error;
+    }
+
+    const blocking = findBlockingZfsClones({
+      snapshots: parseZfsSnapshotClones(output),
+      allowedDatasetPrefixes: (
+        options.allowedDependentStorageRefPrefixes ?? []
+      ).map((prefix) => this.getDatasetPath(prefix)),
+    });
+
+    if (blocking.length > 0) {
+      throw new Error(
+        `Storage ${storageRef} cannot be removed while other branches depend on it (${blocking.join(", ")}). Delete those branches first.`,
+      );
+    }
+  }
+
+  async resolveMountPath(storageRef: string): Promise<string> {
+    return this.getMountPath(storageRef);
+  }
+
+  /**
+   * Destroys a dataset (recursively) and then the snapshot it was cloned
+   * from, so clone origins do not accumulate on the source dataset.
+   */
+  private async destroyDatasetWithOrigin(datasetPath: string): Promise<void> {
+    let origin = "";
+    try {
+      origin = (
+        await runExec(this.zfsCommand, [
+          "get",
+          "-H",
+          "-o",
+          "value",
+          "origin",
+          datasetPath,
+        ])
+      ).trim();
+    } catch (error) {
+      if (isDatasetNotFound(error)) {
+        return;
+      }
+      throw error;
+    }
 
     try {
       await runExec(this.zfsCommand, ["destroy", "-r", datasetPath]);
@@ -403,11 +529,20 @@ export class ZfsBranchStorage implements BranchStorageBackend {
       }
     }
 
-    await rm(mountPath, { recursive: true, force: true });
-  }
+    if (!origin.includes("@frost-")) {
+      return;
+    }
 
-  async resolveMountPath(storageRef: string): Promise<string> {
-    return this.getMountPath(storageRef);
+    try {
+      await runExec(this.zfsCommand, ["destroy", origin]);
+    } catch (error) {
+      if (!isDependentClonesError(error) && !isDatasetNotFound(error)) {
+        console.warn("[zfs-branch-storage] Failed to destroy origin snapshot", {
+          origin,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   private async datasetExistsByPath(datasetPath: string): Promise<boolean> {

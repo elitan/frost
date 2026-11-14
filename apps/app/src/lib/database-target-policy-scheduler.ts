@@ -6,6 +6,7 @@ import { db } from "./db";
 const CHECK_INTERVAL_MS = 60_000;
 
 let intervalId: ReturnType<typeof setInterval> | null = null;
+let tickInFlight = false;
 
 type ScaleToZeroTarget = {
   id: string;
@@ -222,9 +223,17 @@ export async function runDatabaseTargetPolicyScheduler(
 }
 
 function checkAndRun(): void {
-  runDatabaseTargetPolicyScheduler().catch(function onError(error) {
-    console.error("[database-target-policy-scheduler] Error:", error);
-  });
+  if (tickInFlight) {
+    return;
+  }
+  tickInFlight = true;
+  runDatabaseTargetPolicyScheduler()
+    .catch(function onError(error) {
+      console.error("[database-target-policy-scheduler] Error:", error);
+    })
+    .finally(function onFinally() {
+      tickInFlight = false;
+    });
 }
 
 export function startDatabaseTargetPolicyScheduler(): void {

@@ -6,6 +6,7 @@ import {
   type Socket,
 } from "node:net";
 import {
+  flushBufferedChunks,
   getDatabaseTargetGatewayActiveConnections,
   startDatabaseTargetGateway,
   stopAllDatabaseTargetGateways,
@@ -119,5 +120,30 @@ describe("database target gateway", function describeGateway() {
   test("stop is safe when gateway does not exist", async function testStopMissing() {
     await stopDatabaseTargetGateway("dbt_missing");
     expect(getDatabaseTargetGatewayActiveConnections("dbt_missing")).toBe(0);
+  });
+});
+
+describe("flushBufferedChunks", function describeFlush() {
+  test("writes every chunk even when write signals backpressure", function testFlush() {
+    const written: string[] = [];
+    const socket = {
+      write(chunk: Buffer): boolean {
+        written.push(chunk.toString());
+        return written.length <= 1;
+      },
+    };
+    const chunks = [Buffer.from("a"), Buffer.from("b"), Buffer.from("c")];
+
+    const writable = flushBufferedChunks(socket, chunks);
+
+    expect(written).toEqual(["a", "b", "c"]);
+    expect(writable).toBe(false);
+    expect(chunks).toHaveLength(0);
+  });
+
+  test("returns true when socket stays writable", function testWritable() {
+    const chunks = [Buffer.from("a")];
+    expect(flushBufferedChunks({ write: () => true }, chunks)).toBe(true);
+    expect(chunks).toHaveLength(0);
   });
 });

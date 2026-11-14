@@ -11,7 +11,10 @@ import {
   ObjectStorageError,
   revokeObjectStorageAccessKey,
 } from "@/lib/object-storage";
-import { assertDemoServiceCreateAllowed } from "./demo-guards";
+import {
+  assertDemoServiceCreateAllowed,
+  assertDemoWriteAllowed,
+} from "./demo-guards";
 import { os } from "./orpc";
 
 function toApiError(error: unknown): ORPCError<string, unknown> {
@@ -68,6 +71,7 @@ export const objectStorages = {
 
   delete: os.objectStorages.delete.handler(function deleteHandler({ input }) {
     return handleObjectStorageAction(async function deleteAction() {
+      assertDemoWriteAllowed("object storage changes");
       await deleteObjectStorage(input.objectStorageId);
       return { success: true };
     });
@@ -76,6 +80,7 @@ export const objectStorages = {
   createBucket: os.objectStorages.createBucket.handler(
     function createBucketHandler({ input }) {
       return handleObjectStorageAction(function createBucketAction() {
+        assertDemoWriteAllowed("object storage changes");
         return createObjectStorageBucket(input);
       });
     },
@@ -101,6 +106,7 @@ export const objectStorages = {
   createAccessKey: os.objectStorages.createAccessKey.handler(
     function createAccessKeyHandler({ input }) {
       return handleObjectStorageAction(function createAccessKeyAction() {
+        assertDemoWriteAllowed("object storage changes");
         return createObjectStorageAccessKey(input);
       });
     },

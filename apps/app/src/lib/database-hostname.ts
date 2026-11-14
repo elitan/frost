@@ -31,11 +31,23 @@ function clampAlias(value: string): string {
   return `${head}${suffix}`.slice(0, 63);
 }
 
+export const DATABASE_BRANCH_ALIAS_SEPARATOR = "--";
+
+/**
+ * Branch aliases are `${database}--${branch}`, so a name containing the
+ * separator could collide with another database/branch pair.
+ */
+export function containsBranchAliasSeparator(name: string): boolean {
+  return name.includes(DATABASE_BRANCH_ALIAS_SEPARATOR);
+}
+
 export function getDatabaseBranchAlias(
   databaseName: string,
   branchName: string,
 ): string {
-  return clampAlias(`${databaseName}--${branchName}`);
+  return clampAlias(
+    `${databaseName}${DATABASE_BRANCH_ALIAS_SEPARATOR}${branchName}`,
+  );
 }
 
 export function getDatabaseBranchInternalHost(

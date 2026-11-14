@@ -74,6 +74,25 @@ function waitForUpstreamConnection(port: number): Promise<Socket> {
   });
 }
 
+/**
+ * Writes every buffered chunk to the upstream socket and empties the buffer.
+ * Returns false when the socket asked for backpressure, so the caller can
+ * pause the client until "drain".
+ */
+export function flushBufferedChunks(
+  socket: { write(chunk: Buffer): boolean },
+  chunks: Buffer[],
+): boolean {
+  let writable = true;
+  for (const chunk of chunks) {
+    if (!socket.write(chunk)) {
+      writable = false;
+    }
+  }
+  chunks.length = 0;
+  return writable;
+}
+
 function decreaseActiveConnections(entry: DatabaseTargetGatewayEntry): void {
   if (entry.activeConnections <= 0) {
     entry.activeConnections = 0;
@@ -200,10 +219,10 @@ function handleGatewayConnection(
       }
     });
 
-    for (const chunk of bufferedChunks) {
-      if (!upstreamSocket.write(chunk)) {
-        break;
-      }
+    const flushed = flushBufferedChunks(upstreamSocket, bufferedChunks);
+    bufferedBytes = 0;
+    if (!flushed) {
+      clientSocket.pause();
     }
   })();
 }

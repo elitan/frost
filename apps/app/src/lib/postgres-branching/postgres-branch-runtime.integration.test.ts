@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildPostgresCheckpointCommand,
+  buildPostgresCheckpointArgs,
   createRollbackStack,
 } from "./postgres-branch-runtime";
 
@@ -42,17 +42,19 @@ describe("createRollbackStack", () => {
   });
 });
 
-describe("buildPostgresCheckpointCommand", () => {
-  test("builds docker exec psql checkpoint command", () => {
-    const command = buildPostgresCheckpointCommand({
+describe("buildPostgresCheckpointArgs", () => {
+  test("builds docker exec psql checkpoint args without password", () => {
+    const args = buildPostgresCheckpointArgs({
       containerName: "pg-main",
       username: "frost",
       password: "secret",
       database: "frost",
     });
 
-    expect(command).toContain("docker exec");
-    expect(command).toContain("CHECKPOINT;");
-    expect(command).toContain("pg-main");
+    expect(args[0]).toBe("exec");
+    expect(args).toContain("CHECKPOINT;");
+    expect(args).toContain("pg-main");
+    expect(args).toContain("PGPASSWORD");
+    expect(args.join(" ")).not.toContain("secret");
   });
 });

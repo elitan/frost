@@ -6,8 +6,10 @@ import {
   buildZfsCreateArgs,
   buildZfsDatasetPath,
   buildZfsMountPath,
+  findBlockingZfsClones,
   normalizeDatasetBase,
   normalizeStorageRef,
+  parseZfsSnapshotClones,
   resolveSystemCommand,
   resolveZfsPool,
 } from "./zfs-branch-storage";
@@ -140,5 +142,61 @@ describe("resolveSystemCommand", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("parseZfsSnapshotClones", () => {
+  test("parses snapshot clone lists", () => {
+    const output = [
+      "tank/frost/db/main/live@frost-1\ttank/frost/db/a/live,tank/frost/db/b/live",
+      "tank/frost/db/main/live@frost-2\t-",
+      "",
+    ].join("\n");
+
+    expect(parseZfsSnapshotClones(output)).toEqual([
+      {
+        snapshot: "tank/frost/db/main/live@frost-1",
+        clones: ["tank/frost/db/a/live", "tank/frost/db/b/live"],
+      },
+      { snapshot: "tank/frost/db/main/live@frost-2", clones: [] },
+    ]);
+  });
+});
+
+describe("findBlockingZfsClones", () => {
+  const snapshots = [
+    {
+      snapshot: "tank/frost/db1/main/live@frost-1",
+      clones: ["tank/frost/db1/a/live", "tank/frost/db2/b/live"],
+    },
+  ];
+
+  test("reports every clone when nothing is allowed", () => {
+    expect(
+      findBlockingZfsClones({ snapshots, allowedDatasetPrefixes: [] }),
+    ).toEqual(["tank/frost/db1/a/live", "tank/frost/db2/b/live"]);
+  });
+
+  test("ignores clones under allowed prefixes", () => {
+    expect(
+      findBlockingZfsClones({
+        snapshots,
+        allowedDatasetPrefixes: ["tank/frost/db1"],
+      }),
+    ).toEqual(["tank/frost/db2/b/live"]);
+  });
+
+  test("does not treat a sibling with a shared prefix as allowed", () => {
+    expect(
+      findBlockingZfsClones({
+        snapshots: [
+          {
+            snapshot: "tank/frost/db1/x@frost-1",
+            clones: ["tank/frost/db10/y"],
+          },
+        ],
+        allowedDatasetPrefixes: ["tank/frost/db1"],
+      }),
+    ).toEqual(["tank/frost/db10/y"]);
   });
 });

@@ -1,17 +1,17 @@
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { shellEscape } from "../shell-escape";
 import {
   createBranchStorageBackend,
   createBranchStorageBackendByName,
 } from "./backend-factory";
 import type {
+  AssertStorageRemovableOptions,
   BranchStorageBackendName,
   BranchStorageHandle,
   BranchStorageMetadata,
 } from "./branch-storage-backend";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const CHECKPOINT_MAX_ATTEMPTS = 30;
 const CHECKPOINT_RETRY_DELAY_MS = 1000;
 
@@ -81,14 +81,31 @@ export function getPostgresStorageMetadata(
   };
 }
 
-export function buildPostgresCheckpointCommand(
+/**
+ * docker args for a CHECKPOINT. The password is passed via the child process
+ * environment (`-e PGPASSWORD` without a value) so it never shows up in argv.
+ */
+export function buildPostgresCheckpointArgs(
   input: PostgresProviderRefCheckpointLike,
-): string {
-  return (
-    `docker exec -e PGPASSWORD=${shellEscape(input.password)} ${shellEscape(input.containerName)} ` +
-    `psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U ${shellEscape(input.username)} -d ${shellEscape(input.database)} ` +
-    "-c CHECKPOINT;"
-  );
+): string[] {
+  return [
+    "exec",
+    "-e",
+    "PGPASSWORD",
+    input.containerName,
+    "psql",
+    "-X",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-h",
+    "127.0.0.1",
+    "-U",
+    input.username,
+    "-d",
+    input.database,
+    "-c",
+    "CHECKPOINT;",
+  ];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -114,11 +131,12 @@ export async function checkpointPostgresTargetIfRunning(input: {
     return;
   }
 
-  const command = buildPostgresCheckpointCommand(input.providerRef);
+  const args = buildPostgresCheckpointArgs(input.providerRef);
+  const env = { ...process.env, PGPASSWORD: input.providerRef.password };
 
   for (let attempt = 1; attempt <= CHECKPOINT_MAX_ATTEMPTS; attempt += 1) {
     try {
-      await execAsync(command);
+      await execFileAsync("docker", args, { env });
       return;
     } catch (error) {
       if (!shouldRetryCheckpoint(error) || attempt >= CHECKPOINT_MAX_ATTEMPTS) {
@@ -204,4 +222,12 @@ export async function resolvePostgresStorageMountPath(
 ): Promise<string> {
   const backend = await createCheckedBackendForStorage(storage.storageBackend);
   return backend.resolveMountPath(storage.storageRef);
+}
+
+export async function assertPostgresStorageRemovable(
+  storage: BranchStorageMetadata,
+  options?: AssertStorageRemovableOptions,
+): Promise<void> {
+  const backend = await createCheckedBackendForStorage(storage.storageBackend);
+  await backend.assertStorageRemovable(storage.storageRef, options);
 }

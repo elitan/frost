@@ -141,6 +141,8 @@ export class ApfsBranchStorage implements BranchStorageBackend {
     await rm(path, { recursive: true, force: true });
   }
 
+  async assertStorageRemovable(_storageRef: string): Promise<void> {}
+
   async resolveMountPath(storageRef: string): Promise<string> {
     return this.resolveAbsolutePath(storageRef);
   }

@@ -145,7 +145,7 @@ export class CopyBranchStorage implements BranchStorageBackend {
     const stagedPath = this.resolveAbsolutePath(stagedStorageRef);
     const backupPath = `${livePath}.old`;
 
-    await rm(backupPath, { recursive: true, force: true });
+    await this.removeStoragePath(backupPath);
     await rename(livePath, backupPath);
 
     try {
@@ -155,13 +155,15 @@ export class CopyBranchStorage implements BranchStorageBackend {
       throw error;
     }
 
-    await rm(backupPath, { recursive: true, force: true });
+    await this.removeStoragePath(backupPath);
   }
 
   async removeStorage(storageRef: string): Promise<void> {
     const path = this.resolveAbsolutePath(storageRef);
     await this.removeStoragePath(path);
   }
+
+  async assertStorageRemovable(_storageRef: string): Promise<void> {}
 
   async resolveMountPath(storageRef: string): Promise<string> {
     return this.resolveAbsolutePath(storageRef);

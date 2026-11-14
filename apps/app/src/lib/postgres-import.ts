@@ -138,6 +138,15 @@ interface ImportCommandResult {
   stderr: string;
 }
 
+/**
+ * A docker CLI invocation. Secrets (e.g. PGPASSWORD) go in `env` and are
+ * forwarded with a bare `-e NAME` so they never appear in process args.
+ */
+interface DockerCommand {
+  args: string[];
+  env?: Record<string, string>;
+}
+
 interface DatabaseImportJobUpdate {
   databaseId?: string | null;
   targetName?: string;
@@ -166,6 +175,9 @@ const IMPORT_LOG_LIMIT = 200000;
 const PREVIEW_TARGET_VERSION_MIN = 13;
 const TARGET_READY_MAX_ATTEMPTS = 60;
 const TARGET_READY_DELAY_MS = 1000;
+const IMPORT_COMMAND_TIMEOUT_MS = 12 * 60 * 60 * 1000;
+const IMPORT_COMMAND_KILL_GRACE_MS = 10_000;
+const IMPORT_STDERR_BUFFER_LIMIT_BYTES = 1024 * 1024;
 const activeImportJobs = new Set<string>();
 const activeVerifyJobs = new Set<string>();
 const supportedExtensionsPromises = new Map<string, Promise<Set<string>>>();
@@ -418,7 +430,7 @@ function buildSourceDockerArgs(
   parsed: ParsedSourceUrl,
   clientArgs: string[],
   image: string,
-): string[] {
+): DockerCommand {
   const args = ["run", "--rm"];
 
   if (parsed.addHostGateway) {
@@ -427,7 +439,7 @@ function buildSourceDockerArgs(
 
   args.push(
     "-e",
-    `PGPASSWORD=${parsed.password}`,
+    "PGPASSWORD",
     "-e",
     `PGSSLMODE=${parsed.sslMode}`,
     "-e",
@@ -438,14 +450,14 @@ function buildSourceDockerArgs(
     ...clientArgs,
   );
 
-  return args;
+  return { args, env: { PGPASSWORD: parsed.password } };
 }
 
 function buildSourcePsqlArgs(
   parsed: ParsedSourceUrl,
   sql: string,
   image = getDefaultPostgresImage(),
-): string[] {
+): DockerCommand {
   return buildSourceDockerArgs(
     parsed,
     [
@@ -473,7 +485,7 @@ function buildSourcePsqlArgs(
 function buildSourcePgDumpArgs(
   parsed: ParsedSourceUrl,
   image: string,
-): string[] {
+): DockerCommand {
   return buildSourceDockerArgs(
     parsed,
     [
@@ -498,7 +510,7 @@ function buildSourcePgDumpArgs(
 function buildSourcePgDumpPreflightArgs(
   parsed: ParsedSourceUrl,
   image: string,
-): string[] {
+): DockerCommand {
   return buildSourceDockerArgs(
     parsed,
     [
@@ -525,52 +537,58 @@ function buildTargetPsqlArgs(
   providerRef: DatabaseTargetProviderRef,
   database: string,
   sql: string,
-): string[] {
-  return [
-    "exec",
-    "-e",
-    `PGPASSWORD=${providerRef.password}`,
-    providerRef.containerName,
-    "psql",
-    "-X",
-    "-v",
-    "ON_ERROR_STOP=1",
-    "-h",
-    "127.0.0.1",
-    "-U",
-    providerRef.username,
-    "-d",
-    database,
-    "-t",
-    "-A",
-    "-c",
-    sql,
-  ];
+): DockerCommand {
+  return {
+    args: [
+      "exec",
+      "-e",
+      "PGPASSWORD",
+      providerRef.containerName,
+      "psql",
+      "-X",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-h",
+      "127.0.0.1",
+      "-U",
+      providerRef.username,
+      "-d",
+      database,
+      "-t",
+      "-A",
+      "-c",
+      sql,
+    ],
+    env: { PGPASSWORD: providerRef.password },
+  };
 }
 
 function buildTargetPgRestoreArgs(
   providerRef: DatabaseTargetProviderRef,
   remoteDumpPath: string,
-): string[] {
-  return [
-    "exec",
-    "-e",
-    `PGPASSWORD=${providerRef.password}`,
-    providerRef.containerName,
-    "pg_restore",
-    "-h",
-    "127.0.0.1",
-    "-U",
-    providerRef.username,
-    "-d",
-    providerRef.database,
-    "--clean",
-    "--if-exists",
-    "--no-owner",
-    "--no-privileges",
-    "--verbose",
-    remoteDumpPath,
-  ];
+): DockerCommand {
+  return {
+    args: [
+      "exec",
+      "-e",
+      "PGPASSWORD",
+      providerRef.containerName,
+      "pg_restore",
+      "-h",
+      "127.0.0.1",
+      "-U",
+      providerRef.username,
+      "-d",
+      providerRef.database,
+      "--clean",
+      "--if-exists",
+      "--no-owner",
+      "--no-privileges",
+      "--verbose",
+      remoteDumpPath,
+    ],
+    env: { PGPASSWORD: providerRef.password },
+  };
 }
 
 function quoteIdentifier(value: string): string {
@@ -586,82 +604,140 @@ function buildTableKey(schema: string, name: string): string {
 }
 
 async function runCommand(
-  args: string[],
+  command: string[] | DockerCommand,
   options?: {
     stdoutFilePath?: string;
     onStdoutLine?: (line: string) => void;
     onStderrLine?: (line: string) => void;
+    timeoutMs?: number;
   },
 ): Promise<ImportCommandResult> {
+  const { args, env } = Array.isArray(command)
+    ? { args: command, env: undefined }
+    : command;
+  const timeoutMs = options?.timeoutMs ?? IMPORT_COMMAND_TIMEOUT_MS;
+
   return await new Promise(function runCommandPromise(resolve, reject) {
     const child = spawn("docker", args, {
       stdio: ["ignore", "pipe", "pipe"],
+      env: env ? { ...process.env, ...env } : process.env,
     });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
+    let stderrBytes = 0;
+    let settled = false;
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
     const stdoutFileStream = options?.stdoutFilePath
       ? createWriteStream(options.stdoutFilePath)
       : null;
-
-    const stdoutReader = createInterface({
-      input: child.stdout,
-    });
-    stdoutReader.on("line", function onStdoutLine(line) {
-      if (options?.onStdoutLine) {
-        options.onStdoutLine(line);
-      }
-    });
-
+    let stdoutFileFinished = stdoutFileStream === null;
+    let exitCode: number | null | undefined;
+    let stdoutReader: ReturnType<typeof createInterface> | null = null;
     const stderrReader = createInterface({
       input: child.stderr,
     });
+
+    const timeoutTimer = setTimeout(function onTimeout() {
+      timedOut = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(function onKill() {
+        child.kill("SIGKILL");
+      }, IMPORT_COMMAND_KILL_GRACE_MS);
+    }, timeoutMs);
+
+    function settle(error: Error | null, result?: ImportCommandResult): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutTimer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      stdoutReader?.close();
+      stderrReader.close();
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(result ?? { stdout: "", stderr: "" });
+    }
+
+    function maybeFinish(): void {
+      if (exitCode === undefined || !stdoutFileFinished) {
+        return;
+      }
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8").trim();
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+      if (timedOut) {
+        settle(
+          new Error(
+            `Command timed out after ${Math.round(timeoutMs / 1000)}s: docker ${args[0] ?? ""}`,
+          ),
+        );
+        return;
+      }
+      if (exitCode === 0) {
+        settle(null, { stdout, stderr });
+        return;
+      }
+      settle(new Error(stderr || stdout || "command failed"));
+    }
+
+    if (stdoutFileStream) {
+      // Stream straight to disk with backpressure; don't buffer in memory.
+      child.stdout.pipe(stdoutFileStream);
+      stdoutFileStream.on("finish", function onFileFinish() {
+        stdoutFileFinished = true;
+        maybeFinish();
+      });
+      stdoutFileStream.on("error", function onFileError(error) {
+        child.kill("SIGTERM");
+        settle(error);
+      });
+    } else {
+      if (options?.onStdoutLine) {
+        const onStdoutLine = options.onStdoutLine;
+        stdoutReader = createInterface({ input: child.stdout });
+        stdoutReader.on("line", function onLine(line) {
+          onStdoutLine(line);
+        });
+      }
+      child.stdout.on("data", function onStdoutData(chunk) {
+        stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+    }
+
     stderrReader.on("line", function onStderrLine(line) {
       if (options?.onStderrLine) {
         options.onStderrLine(line);
       }
     });
 
-    child.stdout.on("data", function onStdoutData(chunk) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      stdoutChunks.push(buffer);
-      if (stdoutFileStream) {
-        stdoutFileStream.write(buffer);
-      }
-    });
-
     child.stderr.on("data", function onStderrData(chunk) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       stderrChunks.push(buffer);
+      stderrBytes += buffer.length;
+      while (
+        stderrBytes > IMPORT_STDERR_BUFFER_LIMIT_BYTES &&
+        stderrChunks.length > 1
+      ) {
+        const dropped = stderrChunks.shift();
+        stderrBytes -= dropped?.length ?? 0;
+      }
     });
 
     child.on("error", function onError(error) {
-      stdoutReader.close();
-      stderrReader.close();
       if (stdoutFileStream) {
-        stdoutFileStream.end();
+        stdoutFileStream.destroy();
       }
-      reject(error);
+      settle(error);
     });
 
     child.on("close", function onClose(code) {
-      stdoutReader.close();
-      stderrReader.close();
-      const finalize = function finalize(): void {
-        const stdout = Buffer.concat(stdoutChunks).toString("utf8").trim();
-        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
-        if (code === 0) {
-          resolve({ stdout, stderr });
-          return;
-        }
-        reject(new Error(stderr || stdout || "command failed"));
-      };
-
-      if (stdoutFileStream) {
-        stdoutFileStream.end(finalize);
-        return;
-      }
-
-      finalize();
+      exitCode = code;
+      maybeFinish();
     });
   });
 }
@@ -907,8 +983,6 @@ async function waitForTargetReady(
     try {
       await runCommand([
         "exec",
-        "-e",
-        `PGPASSWORD=${providerRef.password}`,
         providerRef.containerName,
         "pg_isready",
         "-h",
@@ -1779,20 +1853,22 @@ async function verifyImport(
 
 export async function runDatabaseImportJob(jobId: string): Promise<void> {
   const logger = createJobLogger(jobId);
-  const job = await getImportJobRow(jobId);
-  const sourceUrl = await getSourceUrlForJob(jobId);
-  const parsed = parseSourceUrl(sourceUrl);
-  const sourceSummary = safeJsonParse<DatabaseImportSourceSummary>(
-    job.sourceSummaryJson,
-    emptySourceSummary(),
-  );
-  const sourceImage = getSourceImageFromSummary(sourceSummary);
-  const database = await getDatabaseForImportJob(jobId);
-  const providerRef = await ensureMainTargetIsRunning(database.id);
-  const tempDir = await mkdtemp(join(tmpdir(), "frost-import-"));
-  const dumpFilePath = join(tempDir, "source.pgdump");
+  let tempDir: string | null = null;
 
   try {
+    const job = await getImportJobRow(jobId);
+    const sourceUrl = await getSourceUrlForJob(jobId);
+    const parsed = parseSourceUrl(sourceUrl);
+    const sourceSummary = safeJsonParse<DatabaseImportSourceSummary>(
+      job.sourceSummaryJson,
+      emptySourceSummary(),
+    );
+    const sourceImage = getSourceImageFromSummary(sourceSummary);
+    const database = await getDatabaseForImportJob(jobId);
+    const providerRef = await ensureMainTargetIsRunning(database.id);
+    tempDir = await mkdtemp(join(tmpdir(), "frost-import-"));
+    const dumpFilePath = join(tempDir, "source.pgdump");
+
     await logger.appendBlock(
       `Starting import from ${parsed.host}:${parsed.port}/${parsed.database}.`,
     );
@@ -1834,13 +1910,15 @@ export async function runDatabaseImportJob(jobId: string): Promise<void> {
     activeVerifyJobs.add(jobId);
     await runDatabaseImportVerifyJob(jobId);
   } catch (error) {
-    await logger.flush();
+    await logger.flush().catch(function ignore() {});
     await markImportFailed(jobId, error);
   } finally {
     activeImportJobs.delete(jobId);
-    await rm(tempDir, { recursive: true, force: true }).catch(
-      function ignore() {},
-    );
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true }).catch(
+        function ignore() {},
+      );
+    }
   }
 }
 
@@ -1891,6 +1969,10 @@ export async function triggerDatabaseImport(
 ): Promise<DatabaseImportJobView> {
   let job = await getImportJobRow(jobId);
 
+  if (job.stage === "completed" || job.stage === "ready-for-cutover") {
+    throw new Error("Import has already finished and cannot be re-run");
+  }
+
   if (!job.databaseId) {
     const createdTargetJob = await createDatabaseImportTarget(jobId);
     if (!createdTargetJob.databaseId) {
@@ -1908,7 +1990,10 @@ export async function triggerDatabaseImport(
   }
 
   activeImportJobs.add(jobId);
-  void runDatabaseImportJob(jobId);
+  void runDatabaseImportJob(jobId).catch(function onImportError(error) {
+    activeImportJobs.delete(jobId);
+    console.error("[postgres-import] Import job crashed", { jobId, error });
+  });
   return await getDatabaseImportJob(jobId);
 }
 
@@ -1931,7 +2016,10 @@ export async function triggerDatabaseImportVerify(
   }
 
   activeVerifyJobs.add(jobId);
-  void runDatabaseImportVerifyJob(jobId);
+  void runDatabaseImportVerifyJob(jobId).catch(function onVerifyError(error) {
+    activeVerifyJobs.delete(jobId);
+    console.error("[postgres-import] Verify job crashed", { jobId, error });
+  });
   return await getDatabaseImportJob(jobId);
 }
 
@@ -1956,4 +2044,25 @@ export async function markDatabaseImportCutover(
   });
 
   return await getDatabaseImportJob(jobId);
+}
+
+/**
+ * Import/verify jobs run in-process; after a restart any job still marked as
+ * running can never finish, so mark it failed so it can be retried.
+ */
+export async function recoverInterruptedDatabaseImportJobs(): Promise<number> {
+  const stuck = await db
+    .selectFrom("databaseImportJobs")
+    .select("id")
+    .where("stage", "in", ["importing", "verifying"])
+    .execute();
+
+  for (const job of stuck) {
+    if (activeImportJobs.has(job.id) || activeVerifyJobs.has(job.id)) {
+      continue;
+    }
+    await markImportFailed(job.id, new Error("Interrupted by restart"));
+  }
+
+  return stuck.length;
 }

@@ -1,9 +1,10 @@
 import { exec, execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import type { Selectable } from "kysely";
 import { nanoid } from "nanoid";
 import {
+  containsBranchAliasSeparator,
   getDatabaseBranchAlias,
   getDatabaseBranchInternalHost,
 } from "./database-hostname";
@@ -41,9 +42,13 @@ import {
   newDatabaseTargetId,
   newRuntimeServiceId,
 } from "./id";
-import type { BranchStorageBackendName } from "./postgres-branching/branch-storage-backend";
+import type {
+  BranchStorageBackendName,
+  BranchStorageMetadata,
+} from "./postgres-branching/branch-storage-backend";
 import {
   assertPostgresBranchingReady,
+  assertPostgresStorageRemovable,
   buildResetTempStorageRef,
   checkpointPostgresTargetIfRunning,
   clonePostgresStorageForTarget,
@@ -156,6 +161,7 @@ const POSTGRES_QUERY_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const TARGET_ACTIVITY_WRITE_THROTTLE_MS = 5000;
 
 const targetActivityWriteAt = new Map<string, number>();
+const targetWakePromises = new Map<string, Promise<number>>();
 
 function randomSecret(bytes = 24): string {
   return randomBytes(bytes).toString("base64url");
@@ -180,11 +186,41 @@ function sanitizeDockerName(value: string): string {
   return sanitized.slice(0, 63).replace(/-+$/g, "");
 }
 
+/**
+ * Container names are derived from the immutable target id so they stay
+ * unique (and stable across renames). Existing targets keep the name stored in
+ * providerRef.containerName until their runtime is recreated.
+ */
+export function buildDatabaseTargetContainerName(input: {
+  databaseId: string;
+  targetId: string;
+}): string {
+  const name = sanitizeDockerName(
+    `frost-db-${input.databaseId}-${input.targetId}`,
+  );
+  const expectedLength = `frost-db-${input.databaseId}-${input.targetId}`
+    .length;
+  if (name.length === expectedLength) {
+    return name;
+  }
+  const hash = createHash("sha256")
+    .update(`${input.databaseId}\0${input.targetId}`)
+    .digest("hex")
+    .slice(0, 16);
+  const head = sanitizeDockerName(`frost-db-${input.targetId}`)
+    .slice(0, 63 - hash.length - 1)
+    .replace(/-+$/g, "");
+  return `${head}-${hash}`;
+}
+
 function assertName(name: string, pattern: RegExp, label: string): void {
   if (!pattern.test(name)) {
     throw new Error(
       `${label} must use lowercase letters, numbers, and hyphens only`,
     );
+  }
+  if (containsBranchAliasSeparator(name)) {
+    throw new Error(`${label} cannot contain consecutive hyphens (--)`);
   }
 }
 
@@ -512,21 +548,25 @@ async function waitForPostgresPublishedReady(
 
   while (Date.now() < deadline) {
     try {
-      const { stdout } = await execFileAsync("docker", [
-        "run",
-        "--rm",
-        ...getDockerHostArgs(),
-        "-e",
-        `PGPASSWORD=${providerRef.password}`,
-        helperImage,
-        "psql",
-        `host=host.docker.internal port=${providerRef.hostPort} user=${providerRef.username} dbname=${providerRef.database} sslmode=require connect_timeout=5`,
-        "-X",
-        "-t",
-        "-A",
-        "-c",
-        "select 1",
-      ]);
+      const { stdout } = await execFileAsync(
+        "docker",
+        [
+          "run",
+          "--rm",
+          ...getDockerHostArgs(),
+          "-e",
+          "PGPASSWORD",
+          helperImage,
+          "psql",
+          `host=host.docker.internal port=${providerRef.hostPort} user=${providerRef.username} dbname=${providerRef.database} sslmode=require connect_timeout=5`,
+          "-X",
+          "-t",
+          "-A",
+          "-c",
+          "select 1",
+        ],
+        { env: { ...process.env, PGPASSWORD: providerRef.password } },
+      );
       if (stdout.trim() === "1") {
         return;
       }
@@ -670,9 +710,10 @@ async function createTargetRuntime(input: {
   const password = input.templateRef?.password ?? randomSecret();
   const database =
     input.templateRef?.database ?? getDatabaseNameSlug(input.databaseName);
-  const containerName = sanitizeDockerName(
-    `frost-db-${input.databaseId}-${input.targetName}`,
-  );
+  const containerName = buildDatabaseTargetContainerName({
+    databaseId: input.databaseId,
+    targetId: input.targetId,
+  });
   const memoryLimit =
     input.memoryLimit ?? input.templateRef?.memoryLimit ?? null;
   const cpuLimit = input.cpuLimit ?? input.templateRef?.cpuLimit ?? null;
@@ -815,6 +856,11 @@ async function recreateTargetRuntime(input: {
   const storageMountPath = storage
     ? await resolvePostgresStorageMountPath(storage)
     : undefined;
+
+  // The stored container name may differ from the one createTargetRuntime
+  // derives (legacy naming), so always remove the old container first to
+  // avoid two runtimes on the same data directory.
+  await stopContainer(input.providerRef.containerName);
 
   const nextRef = await createTargetRuntime({
     databaseId: input.database.id,
@@ -1037,6 +1083,34 @@ function isScaleToZeroEnabled(
   return target.scaleToZeroMinutes !== null;
 }
 
+async function wakeTargetForGatewayOnce(targetId: string): Promise<number> {
+  let current = await getTargetById(targetId);
+  if (current.lifecycleStatus !== "active") {
+    current = await startDatabaseTarget({
+      databaseId: current.databaseId,
+      targetId: current.id,
+    });
+  }
+  const currentProviderRef = parseProviderRef(current.providerRefJson);
+  return getTargetRuntimeHostPort(current, currentProviderRef);
+}
+
+/**
+ * Concurrent gateway connections share a single wake so a sleeping target is
+ * only started once.
+ */
+function wakeTargetForGateway(targetId: string): Promise<number> {
+  const pending = targetWakePromises.get(targetId);
+  if (pending) {
+    return pending;
+  }
+  const wake = wakeTargetForGatewayOnce(targetId).finally(function clearWake() {
+    targetWakePromises.delete(targetId);
+  });
+  targetWakePromises.set(targetId, wake);
+  return wake;
+}
+
 async function ensureTargetGateway(targetId: string): Promise<void> {
   const target = await getTargetById(targetId);
   const providerRef = parseProviderRef(target.providerRefJson);
@@ -1053,16 +1127,8 @@ async function ensureTargetGateway(targetId: string): Promise<void> {
   await startDatabaseTargetGateway({
     targetId: target.id,
     listenPort: providerRef.hostPort,
-    ensureRunning: async function ensureRunning() {
-      let current = await getTargetById(target.id);
-      if (current.lifecycleStatus !== "active") {
-        current = await startDatabaseTarget({
-          databaseId: current.databaseId,
-          targetId: current.id,
-        });
-      }
-      const currentProviderRef = parseProviderRef(current.providerRefJson);
-      return getTargetRuntimeHostPort(current, currentProviderRef);
+    ensureRunning: function ensureRunning() {
+      return wakeTargetForGateway(target.id);
     },
     onActivity: function onActivity() {
       queueTargetActivityWrite(target.id);
@@ -1397,6 +1463,8 @@ export async function resetDatabaseTarget(input: {
     providerRef: sourceRef,
   });
 
+  await assertPostgresStorageRemovable(currentStorage);
+
   const stagedStorageRef = buildResetTempStorageRef(database.id, target.id);
   const stagedStorage = await clonePostgresStorageForTarget({
     sourceStorage,
@@ -1619,9 +1687,15 @@ export async function deleteDatabaseTarget(input: {
     throw new Error("main target cannot be deleted");
   }
 
+  const providerRef = parseProviderRef(target.providerRefJson);
+  if (database.engine === "postgres") {
+    await assertPostgresStorageRemovable(
+      getPostgresStorageMetadata(providerRef),
+    );
+  }
+
   await stopDatabaseTargetGateway(target.id);
   clearTargetActivityWrite(target.id);
-  const providerRef = parseProviderRef(target.providerRefJson);
   await stopContainer(providerRef.containerName);
   if (database.engine === "postgres") {
     await removePostgresStorage(getPostgresStorageMetadata(providerRef));
@@ -1638,18 +1712,67 @@ export async function deleteDatabase(databaseId: string): Promise<void> {
     .where("databaseId", "=", database.id)
     .execute();
 
-  for (const target of targets) {
+  const isPostgres = database.engine === "postgres";
+  const parsedTargets = targets.map(function parseTarget(target) {
+    return { target, providerRef: parseProviderRef(target.providerRefJson) };
+  });
+
+  // Branches of this database may depend on each other; only dependents
+  // outside the database block removal. Check before stopping anything.
+  if (isPostgres) {
+    for (const { providerRef } of parsedTargets) {
+      await assertPostgresStorageRemovable(
+        getPostgresStorageMetadata(providerRef),
+        { allowedDependentStorageRefPrefixes: [`${database.id}/`] },
+      );
+    }
+  }
+
+  for (const { target, providerRef } of parsedTargets) {
     await stopDatabaseTargetGateway(target.id);
     clearTargetActivityWrite(target.id);
-    const providerRef = parseProviderRef(target.providerRefJson);
     await stopContainer(providerRef.containerName);
-    if (database.engine === "postgres") {
-      await removePostgresStorage(getPostgresStorageMetadata(providerRef));
+  }
+
+  if (isPostgres) {
+    await removePostgresStoragesInDependencyOrder(
+      parsedTargets.map(function toStorage({ providerRef }) {
+        return getPostgresStorageMetadata(providerRef);
+      }),
+    );
+    for (const { target } of parsedTargets) {
       await removeSSLCerts(target.id);
     }
   }
 
   await db.deleteFrom("databases").where("id", "=", database.id).execute();
+}
+
+/**
+ * Removes storages that may depend on each other (e.g. ZFS clones): retries
+ * failed removals while each pass makes progress, so clones go before their
+ * origins regardless of input order.
+ */
+async function removePostgresStoragesInDependencyOrder(
+  storages: BranchStorageMetadata[],
+): Promise<void> {
+  let pending = storages;
+  while (pending.length > 0) {
+    const failed: BranchStorageMetadata[] = [];
+    let lastError: unknown;
+    for (const storage of pending) {
+      try {
+        await removePostgresStorage(storage);
+      } catch (error) {
+        failed.push(storage);
+        lastError = error;
+      }
+    }
+    if (failed.length === pending.length) {
+      throw lastError;
+    }
+    pending = failed;
+  }
 }
 
 export async function patchDatabase(input: {
@@ -1661,6 +1784,9 @@ export async function patchDatabase(input: {
 
   if (input.name !== undefined) {
     const name = input.name.trim();
+    if (name === database.name) {
+      return database;
+    }
     assertDatabaseName(name);
 
     const existing = await db
@@ -1829,15 +1955,38 @@ export async function runPostgresTargetSql(input: {
   const fieldSeparator = "\u001f";
   const rowSeparator = "\u001e";
   const nullToken = "__FROST_SQL_NULL__";
-  const command =
-    `docker exec -e PGPASSWORD=${shellEscape(providerRef.password)} ${shellEscape(providerRef.containerName)} ` +
-    `psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U ${shellEscape(providerRef.username)} -d ${shellEscape(providerRef.database)} ` +
-    `-A -F ${shellEscape(fieldSeparator)} -R ${shellEscape(rowSeparator)} ` +
-    `-P footer=off -P null=${shellEscape(nullToken)} -c ${shellEscape(sql)}`;
+  const args = [
+    "exec",
+    "-e",
+    "PGPASSWORD",
+    providerRef.containerName,
+    "psql",
+    "-X",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-h",
+    "127.0.0.1",
+    "-U",
+    providerRef.username,
+    "-d",
+    providerRef.database,
+    "-A",
+    "-F",
+    fieldSeparator,
+    "-R",
+    rowSeparator,
+    "-P",
+    "footer=off",
+    "-P",
+    `null=${nullToken}`,
+    "-c",
+    sql,
+  ];
 
   try {
-    const { stdout, stderr } = await execAsync(command, {
+    const { stdout, stderr } = await execFileAsync("docker", args, {
       maxBuffer: POSTGRES_QUERY_MAX_BUFFER_BYTES,
+      env: { ...process.env, PGPASSWORD: providerRef.password },
     });
     const parsed = parsePostgresQueryOutput({
       output: stdout,
@@ -1899,16 +2048,20 @@ export async function patchDatabaseTargetRuntimeSettings(input: {
 
   if (input.name !== undefined) {
     const trimmedName = input.name.trim();
-    assertTargetName(trimmedName);
-    if (target.name === "main") {
-      throw new Error("main cannot be renamed");
+    if (trimmedName !== target.name) {
+      assertTargetName(trimmedName);
+      if (target.name === "main") {
+        throw new Error("main cannot be renamed");
+      }
     }
     nextName = trimmedName;
   }
 
   if (input.hostname !== undefined) {
     const trimmedHostname = input.hostname.trim();
-    assertTargetHostname(trimmedHostname);
+    if (trimmedHostname !== target.hostname) {
+      assertTargetHostname(trimmedHostname);
+    }
     nextHostname = trimmedHostname;
   } else if (nextName !== target.name && target.hostname === target.name) {
     nextHostname = nextName;

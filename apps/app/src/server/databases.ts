@@ -37,6 +37,7 @@ import {
   triggerDatabaseImport,
   triggerDatabaseImportVerify,
 } from "@/lib/postgres-import";
+import { assertDemoWriteAllowed } from "./demo-guards";
 import { os } from "./orpc";
 
 function toApiError(error: unknown) {
@@ -149,6 +150,7 @@ async function assertBranchPolicyPatchAllowed(input: {
 
 export const databases = {
   create: os.databases.create.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     const project = await db
       .selectFrom("projects")
       .select("id")
@@ -195,6 +197,7 @@ export const databases = {
   }),
 
   upsertBackup: os.databases.upsertBackup.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       return await updatePostgresBackupConfig({
         databaseId: input.databaseId,
@@ -232,6 +235,7 @@ export const databases = {
   ),
 
   runBackup: os.databases.runBackup.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       return await runPostgresBackup(input.databaseId);
     } catch (error) {
@@ -248,6 +252,7 @@ export const databases = {
   }),
 
   restoreBackup: os.databases.restoreBackup.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       return await restorePostgresBackup({
         databaseId: input.databaseId,
@@ -262,6 +267,7 @@ export const databases = {
   }),
 
   createImportJob: os.databases.createImportJob.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       return await createDatabaseImportJob({
         projectId: input.projectId,
@@ -293,6 +299,7 @@ export const databases = {
 
   createImportTarget: os.databases.createImportTarget.handler(
     async ({ input }) => {
+      assertDemoWriteAllowed("database changes");
       try {
         return await createDatabaseImportTarget(input.jobId);
       } catch (error) {
@@ -302,6 +309,7 @@ export const databases = {
   ),
 
   runImportJob: os.databases.runImportJob.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       return await triggerDatabaseImport(input.jobId);
     } catch (error) {
@@ -310,6 +318,7 @@ export const databases = {
   }),
 
   runImportVerify: os.databases.runImportVerify.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       return await triggerDatabaseImportVerify(input.jobId);
     } catch (error) {
@@ -319,6 +328,7 @@ export const databases = {
 
   markImportCutover: os.databases.markImportCutover.handler(
     async ({ input }) => {
+      assertDemoWriteAllowed("database changes");
       try {
         return await markDatabaseImportCutover(input.jobId);
       } catch (error) {
@@ -328,6 +338,7 @@ export const databases = {
   ),
 
   delete: os.databases.delete.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       await deleteDatabase(input.databaseId);
       return { success: true };
@@ -337,6 +348,7 @@ export const databases = {
   }),
 
   createTarget: os.databases.createTarget.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       return await createDatabaseTarget(input);
     } catch (error) {
@@ -397,6 +409,7 @@ export const databases = {
   ),
 
   runTargetSql: os.databases.runTargetSql.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       await getTargetByDatabase(input.databaseId, input.targetId);
       return await runPostgresTargetSql({
@@ -410,6 +423,7 @@ export const databases = {
 
   patchTargetRuntimeSettings: os.databases.patchTargetRuntimeSettings.handler(
     async ({ input }) => {
+      assertDemoWriteAllowed("database changes");
       try {
         await getTargetByDatabase(input.databaseId, input.targetId);
         await assertBranchPolicyPatchAllowed({
@@ -436,6 +450,7 @@ export const databases = {
   ),
 
   resetTarget: os.databases.resetTarget.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       return await resetDatabaseTarget(input);
     } catch (error) {
@@ -452,6 +467,7 @@ export const databases = {
   }),
 
   deleteTarget: os.databases.deleteTarget.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       await deleteDatabaseTarget(input);
       return { success: true };
@@ -461,6 +477,7 @@ export const databases = {
   }),
 
   createBranch: os.databases.createBranch.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       await assertPostgresDatabase(input.databaseId);
       return await createDatabaseTarget(input);
@@ -488,6 +505,7 @@ export const databases = {
   }),
 
   patchBranch: os.databases.patchBranch.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       await assertPostgresBranch(input.databaseId, input.targetId);
       await assertBranchPolicyPatchAllowed({
@@ -513,6 +531,7 @@ export const databases = {
   }),
 
   deleteBranch: os.databases.deleteBranch.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       await assertPostgresBranch(input.databaseId, input.targetId);
       await deleteDatabaseTarget(input);
@@ -541,6 +560,7 @@ export const databases = {
   }),
 
   resetBranch: os.databases.resetBranch.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       await assertPostgresBranch(input.databaseId, input.targetId);
       return await resetDatabaseTarget(input);
@@ -550,6 +570,7 @@ export const databases = {
   }),
 
   runBranchSql: os.databases.runBranchSql.handler(async ({ input }) => {
+    assertDemoWriteAllowed("database changes");
     try {
       await assertPostgresBranch(input.databaseId, input.targetId);
       return await runPostgresTargetSql({
