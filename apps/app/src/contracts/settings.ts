@@ -43,7 +43,7 @@ export const settingsContract = {
     .input(
       z.object({
         domain: domainNameSchema,
-        email: z.string(),
+        email: z.string().trim().email(),
         staging: z.boolean().optional(),
       }),
     )

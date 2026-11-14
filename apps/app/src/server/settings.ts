@@ -9,11 +9,13 @@ import {
   setSetting,
   verifyPassword,
 } from "@/lib/auth";
-import { configureDomain, isCaddyRunning, lockToDomain } from "@/lib/caddy";
+import { isCaddyRunning } from "@/lib/caddy";
 import { createWildcardARecord } from "@/lib/cloudflare";
 import { isDemoMode } from "@/lib/demo-mode";
+import { normalizeDomainName } from "@/lib/domain-validation";
 import {
   backfillWildcardDomains,
+  getDomainByName,
   getServerIp,
   syncCaddyConfig,
 } from "@/lib/domains";
@@ -147,7 +149,15 @@ export const settings = {
   }),
 
   verifySsl: os.settings.verifySsl.handler(async ({ input }) => {
-    const { domain } = input;
+    assertDemoWriteAllowed("domain and ssl changes");
+
+    const storedDomain = await getSetting("domain");
+    if (!storedDomain || normalizeDomainName(storedDomain) !== input.domain) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: "Domain does not match the configured Frost domain",
+      });
+    }
+    const domain = input.domain;
 
     const staging = (await getSetting("ssl_staging")) === "true";
 
@@ -155,12 +165,6 @@ export const settings = {
 
     if (result.ok && result.status && result.status < 500) {
       await setSetting("ssl_enabled", "true");
-
-      const email = await getSetting("email");
-      if (email) {
-        await lockToDomain(domain, email, staging);
-      }
-
       return { working: true };
     }
 
@@ -190,12 +194,37 @@ export const settings = {
       });
     }
 
-    await configureDomain(domain, email, staging);
+    const conflictingServiceDomain = await getDomainByName(domain);
+    if (conflictingServiceDomain) {
+      throw new ORPCError("CONFLICT", {
+        message: "Domain is already attached to a service",
+      });
+    }
+
+    const previous = {
+      domain: await getSetting("domain"),
+      email: await getSetting("email"),
+      sslEnabled: await getSetting("ssl_enabled"),
+      sslStaging: await getSetting("ssl_staging"),
+    };
 
     await setSetting("domain", domain);
     await setSetting("email", email);
     await setSetting("ssl_enabled", "pending");
     await setSetting("ssl_staging", staging ? "true" : "false");
+
+    try {
+      await syncCaddyConfig();
+    } catch (error) {
+      await setSetting("domain", previous.domain ?? "");
+      await setSetting("email", previous.email ?? "");
+      await setSetting("ssl_enabled", previous.sslEnabled ?? "");
+      await setSetting("ssl_staging", previous.sslStaging ?? "");
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        message:
+          error instanceof Error ? error.message : "Failed to configure Caddy",
+      });
+    }
 
     return { success: true, status: "pending" };
   }),

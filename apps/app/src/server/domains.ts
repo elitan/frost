@@ -2,6 +2,7 @@ import https from "node:https";
 import { ORPCError } from "@orpc/server";
 import { getSetting } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { normalizeDomainName } from "@/lib/domain-validation";
 import {
   addDomain,
   getDomain,
@@ -44,6 +45,15 @@ function checkHttps(
 
     req.end();
   });
+}
+
+async function assertNotFrostDomain(domain: string) {
+  const frostDomain = await getSetting("domain");
+  if (frostDomain && normalizeDomainName(frostDomain) === domain) {
+    throw new ORPCError("CONFLICT", {
+      message: "This domain is used by the Frost dashboard",
+    });
+  }
 }
 
 export const domains = {
@@ -106,9 +116,17 @@ export const domains = {
       throw new ORPCError("CONFLICT", { message: "Domain already exists" });
     }
 
+    await assertNotFrostDomain(input.domain);
+
     if (input.type === "redirect" && !input.redirectTarget) {
       throw new ORPCError("BAD_REQUEST", {
         message: "redirectTarget is required for redirect type",
+      });
+    }
+
+    if (input.type === "redirect" && input.redirectTarget === input.domain) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: "A domain cannot redirect to itself",
       });
     }
 
@@ -128,19 +146,36 @@ export const domains = {
       throw new ORPCError("NOT_FOUND", { message: "Domain not found" });
     }
 
+    const nextType = input.type ?? domain.type;
     const updates: Parameters<typeof updateDomain>[1] = {};
     if (input.type !== undefined) updates.type = input.type;
-    if (input.redirectTarget !== undefined)
-      updates.redirectTarget = input.redirectTarget;
-    if (input.redirectCode !== undefined)
-      updates.redirectCode = input.redirectCode;
+
+    if (nextType === "proxy") {
+      updates.redirectTarget = null;
+    } else {
+      const nextTarget = input.redirectTarget ?? domain.redirectTarget;
+      if (!nextTarget) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: "redirectTarget is required for redirect type",
+        });
+      }
+      if (nextTarget === domain.domain) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: "A domain cannot redirect to itself",
+        });
+      }
+      updates.redirectTarget = nextTarget;
+      updates.redirectCode = input.redirectCode ?? domain.redirectCode ?? 301;
+    }
 
     const updated = await updateDomain(input.id, updates);
 
     if (domain.dnsVerified) {
       try {
         await syncCaddyConfig();
-      } catch {}
+      } catch (err) {
+        console.error("Failed to sync Caddy config after domain update:", err);
+      }
     }
 
     return updated;
@@ -176,7 +211,9 @@ export const domains = {
     if (domain.dnsVerified) {
       try {
         await syncCaddyConfig();
-      } catch {}
+      } catch (err) {
+        console.error("Failed to sync Caddy config after domain delete:", err);
+      }
     }
 
     return { success: true };
@@ -190,8 +227,11 @@ export const domains = {
 
     const dnsStatus = await verifyDomainDns(domain.domain);
 
-    if (dnsStatus.valid && !domain.dnsVerified) {
-      await updateDomain(input.id, { dnsVerified: true });
+    if (dnsStatus.valid) {
+      if (!domain.dnsVerified) {
+        await updateDomain(input.id, { dnsVerified: true });
+      }
+      // Always re-sync so a previously failed sync is retried.
       try {
         await syncCaddyConfig();
       } catch (err) {

@@ -2,7 +2,11 @@ import { promises as dns } from "node:dns";
 import { getSetting } from "./auth";
 import { acmeIssuer, type DnsConfig, dnsAcmeIssuer } from "./caddy";
 import { db } from "./db";
-import { normalizeDomainName, parseDomainName } from "./domain-validation";
+import {
+  isValidDomainName,
+  normalizeDomainName,
+  parseDomainName,
+} from "./domain-validation";
 import { newDomainId } from "./id";
 
 const CADDY_ADMIN = "http://localhost:2019";
@@ -176,6 +180,7 @@ export async function backfillWildcardDomains(): Promise<number> {
       row.hostname,
       row.projectHostname,
       envName,
+      { sync: false },
     );
     count++;
   }
@@ -183,26 +188,31 @@ export async function backfillWildcardDomains(): Promise<number> {
   return count;
 }
 
+function truncateLabel(value: string, max: number): string {
+  return value.substring(0, max).replace(/-+$/, "");
+}
+
 export function buildWildcardSlug(
   serviceHostname: string,
   projectHostname: string,
   environmentName?: string,
+  suffix = "",
 ): string {
+  const max = DNS_LABEL_MAX - suffix.length;
+
   if (!environmentName) {
-    return `${serviceHostname}-${projectHostname}`.substring(0, DNS_LABEL_MAX);
+    return truncateLabel(`${serviceHostname}-${projectHostname}`, max) + suffix;
   }
 
   const fixedParts = serviceHostname.length + projectHostname.length + 2;
-  const availableForEnv = DNS_LABEL_MAX - fixedParts;
+  const availableForEnv = max - fixedParts;
 
   if (availableForEnv <= 0) {
-    return `${serviceHostname}-${projectHostname}`.substring(0, DNS_LABEL_MAX);
+    return truncateLabel(`${serviceHostname}-${projectHostname}`, max) + suffix;
   }
 
-  const truncatedEnv = environmentName
-    .substring(0, availableForEnv)
-    .replace(/-+$/, "");
-  return `${serviceHostname}-${truncatedEnv}-${projectHostname}`;
+  const truncatedEnv = truncateLabel(environmentName, availableForEnv);
+  return `${serviceHostname}-${truncatedEnv}-${projectHostname}${suffix}`;
 }
 
 export async function createWildcardDomain(
@@ -211,22 +221,24 @@ export async function createWildcardDomain(
   serviceHostname: string,
   projectHostname: string,
   environmentName?: string,
+  options: { sync?: boolean } = {},
 ): Promise<void> {
   if (process.env.NODE_ENV === "development") return;
 
   const wildcardBase = await getSetting("wildcard_domain");
   if (!wildcardBase) return;
 
-  const slug = buildWildcardSlug(
-    serviceHostname,
-    projectHostname,
-    environmentName,
-  );
   let domain: string | null = null;
 
   for (let i = 0; i < 10; i++) {
-    const candidate =
-      i === 0 ? `${slug}.${wildcardBase}` : `${slug}-${i + 1}.${wildcardBase}`;
+    const slug = buildWildcardSlug(
+      serviceHostname,
+      projectHostname,
+      environmentName,
+      i === 0 ? "" : `-${i + 1}`,
+    );
+    const candidate = `${slug}.${wildcardBase}`;
+    if (!isValidDomainName(candidate)) continue;
     const existing = await getDomainByName(candidate);
     if (!existing) {
       domain = candidate;
@@ -261,7 +273,9 @@ export async function createWildcardDomain(
     })
     .execute();
 
-  await syncCaddyConfig();
+  if (options.sync !== false) {
+    await syncCaddyConfig();
+  }
 }
 
 export async function getServerIp(): Promise<string> {
@@ -457,7 +471,35 @@ interface SyncResult {
   staging: boolean;
 }
 
-export async function syncCaddyConfig(): Promise<SyncResult> {
+let syncInFlight: Promise<SyncResult> | null = null;
+let syncQueued: Promise<SyncResult> | null = null;
+
+/**
+ * Serialized Caddy sync. Every call reads the DB and replaces the whole
+ * Caddy config, so concurrent calls could otherwise land out of order and
+ * leave a stale config loaded. Calls made while a sync is running are
+ * coalesced into exactly one follow-up sync that sees the latest DB state.
+ */
+export function syncCaddyConfig(): Promise<SyncResult> {
+  if (!syncInFlight) {
+    syncInFlight = doSyncCaddyConfig().finally(() => {
+      syncInFlight = null;
+    });
+    return syncInFlight;
+  }
+  if (!syncQueued) {
+    const previous = syncInFlight;
+    syncQueued = previous
+      .catch(() => undefined)
+      .then(() => {
+        syncQueued = null;
+        return syncCaddyConfig();
+      });
+  }
+  return syncQueued;
+}
+
+async function doSyncCaddyConfig(): Promise<SyncResult> {
   const frostDomain = await getSetting("domain");
   const email = await getSetting("email");
   const staging = (await getSetting("ssl_staging")) === "true";
@@ -505,7 +547,14 @@ export async function syncCaddyConfig(): Promise<SyncResult> {
     });
   }
 
+  const normalizedFrostDomain = frostDomain
+    ? normalizeDomainName(frostDomain)
+    : null;
+
   for (const d of verifiedDomains) {
+    // Never let a service domain take over the Frost dashboard route.
+    if (normalizedFrostDomain && d.domain === normalizedFrostDomain) continue;
+
     if (d.type === "proxy") {
       const port = d.replicaHostPort ?? d.deploymentHostPort;
       if (!port) continue;

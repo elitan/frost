@@ -44,7 +44,7 @@ export const domainsContract = {
         serviceId: z.string(),
         domain: domainNameSchema,
         type: z.enum(["proxy", "redirect"]).default("proxy"),
-        redirectTarget: z.string().optional(),
+        redirectTarget: domainNameSchema.optional(),
         redirectCode: z.union([z.literal(301), z.literal(307)]).optional(),
       }),
     )
@@ -56,7 +56,7 @@ export const domainsContract = {
       z.object({
         id: z.string(),
         type: z.enum(["proxy", "redirect"]).optional(),
-        redirectTarget: z.string().optional(),
+        redirectTarget: domainNameSchema.optional(),
         redirectCode: z.union([z.literal(301), z.literal(307)]).optional(),
       }),
     )

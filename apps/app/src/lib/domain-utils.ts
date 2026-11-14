@@ -1,5 +1,7 @@
+import psl from "psl";
+
 export function extractSubdomain(domain: string): string {
-  const parts = domain.split(".");
-  if (parts.length <= 2) return "@";
-  return parts[0];
+  const root = psl.get(domain);
+  if (!root || root === domain) return "@";
+  return domain.slice(0, -(root.length + 1));
 }

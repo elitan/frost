@@ -4,7 +4,7 @@ import { buildWildcardSlug } from "./domains";
 
 describe("extractSubdomain", () => {
   test("extracts subdomain from full domain", () => {
-    expect(extractSubdomain("testapp.frost.j4labs.se")).toBe("testapp");
+    expect(extractSubdomain("testapp.frost.j4labs.se")).toBe("testapp.frost");
   });
 
   test("returns @ for apex domain (two parts)", () => {
@@ -20,7 +20,7 @@ describe("extractSubdomain", () => {
   });
 
   test("handles deep subdomain (only returns first part)", () => {
-    expect(extractSubdomain("api.v2.example.com")).toBe("api");
+    expect(extractSubdomain("api.v2.example.com")).toBe("api.v2");
   });
 
   test("handles subdomain with hyphens", () => {
@@ -76,5 +76,24 @@ describe("buildWildcardSlug", () => {
   test("exact 63 char boundary", () => {
     const slug = buildWildcardSlug("api", "proj", "a".repeat(56));
     expect(slug.length).toBe(63);
+  });
+});
+
+describe("buildWildcardSlug length safety", () => {
+  test("never ends with a hyphen after truncation", () => {
+    const slug = buildWildcardSlug("a".repeat(62), "proj");
+    expect(slug.length).toBeLessThanOrEqual(63);
+    expect(slug.endsWith("-")).toBe(false);
+  });
+
+  test("suffix stays within the 63-char label limit", () => {
+    const slug = buildWildcardSlug(
+      "a".repeat(40),
+      "b".repeat(30),
+      undefined,
+      "-2",
+    );
+    expect(slug.length).toBeLessThanOrEqual(63);
+    expect(slug.endsWith("-2")).toBe(true);
   });
 });
