@@ -1,12 +1,14 @@
-FROM oven/bun:1 AS base
+FROM oven/bun:1.4.4 AS base
 WORKDIR /app
 
 FROM base AS deps
-RUN apt-get update && apt-get install -y python3 build-essential && rm -rf /var/lib/apt/lists/*
 COPY package.json bun.lock ./
 COPY apps/app/package.json ./apps/app/
 COPY apps/marketing/package.json ./apps/marketing/
-RUN bun install
+# --ignore-scripts: the workspace's only native module (better-sqlite3, a
+# dev-only dependency of the app for `db:gen`) isn't needed here and doesn't
+# compile against newer Node headers.
+RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM base AS openapi-gen
 COPY --from=deps /app/node_modules ./node_modules
