@@ -153,6 +153,10 @@ if ! caddy list-modules 2>/dev/null | grep -q "dns.providers.cloudflare"; then
   chmod +x /usr/bin/caddy
 
   timer "Configuring Caddy service..."
+  # Frost owns Caddy's config via the admin API (POST /load), which Caddy
+  # autosaves. `--resume` restarts from that autosave and only falls back to
+  # the Caddyfile on first boot. No ExecReload: `caddy reload` needs a config
+  # file, and reloading the Caddyfile would wipe Frost's routes.
   groupadd --system caddy 2>/dev/null || true
   useradd --system --gid caddy --create-home --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy 2>/dev/null || true
 
@@ -166,8 +170,7 @@ Requires=network-online.target
 Type=notify
 User=caddy
 Group=caddy
-ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
-ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force
+ExecStart=/usr/bin/caddy run --environ --resume --config /etc/caddy/Caddyfile
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 LimitNPROC=512
@@ -184,6 +187,13 @@ CADDY_SERVICE
   systemctl enable caddy
 else
   timer "Caddy DNS modules present"
+  # Migrate units written by older installers (see comment above)
+  CADDY_UNIT=/etc/systemd/system/caddy.service
+  if [ -f "$CADDY_UNIT" ] && grep -q '^ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile$' "$CADDY_UNIT"; then
+    sed -i 's|^ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile$|ExecStart=/usr/bin/caddy run --environ --resume --config /etc/caddy/Caddyfile|' "$CADDY_UNIT"
+    sed -i '\|^ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile|d' "$CADDY_UNIT"
+    systemctl daemon-reload
+  fi
 fi
 
 is_valid_ipv4() {
@@ -241,7 +251,9 @@ if ! is_valid_ipv4 "$SERVER_IP"; then
   exit 1
 fi
 
-# Configure Caddy with self-signed HTTPS
+# Configure Caddy with self-signed HTTPS. This IP-only Caddyfile is the
+# first-boot config; Frost's first config sync replaces it (and the IP route)
+# and Caddy then resumes Frost's autosaved config on restart.
 timer "Configuring Caddy..."
 cat > /etc/caddy/Caddyfile << EOF
 :80 {

@@ -77,6 +77,13 @@ export async function register() {
     startDatabaseTargetPolicyScheduler();
     console.log("[startup] database target policy scheduler: started");
 
+    const { startCaddyReconcileScheduler } = await import(
+      "./lib/caddy-reconcile"
+    );
+    if (startCaddyReconcileScheduler()) {
+      console.log("[startup] caddy reconcile scheduler: started");
+    }
+
     const { syncCaddyConfig } = await import("./lib/domains");
     try {
       const result = await syncCaddyConfig();

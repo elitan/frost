@@ -320,7 +320,7 @@ export async function verifyDomainDns(domain: string): Promise<DnsStatus> {
   return { valid, serverIp, domainIp: domainIps[0] ?? null, errorType };
 }
 
-interface DomainRoute {
+export interface DomainRoute {
   domain: string;
   type: "proxy" | "redirect" | "frost-admin";
   hostPorts: number[];
@@ -329,12 +329,12 @@ interface DomainRoute {
   requestTimeout?: number;
 }
 
-interface WildcardConfig {
+export interface WildcardConfig {
   domain: string;
   dnsConfig: DnsConfig;
 }
 
-function buildCaddyConfig(
+export function buildCaddyConfig(
   routes: DomainRoute[],
   email: string,
   staging: boolean,
@@ -499,7 +499,22 @@ export function syncCaddyConfig(): Promise<SyncResult> {
   return syncQueued;
 }
 
-async function doSyncCaddyConfig(): Promise<SyncResult> {
+export type CaddyConfig = ReturnType<typeof buildCaddyConfig>;
+
+export interface DesiredCaddyConfig {
+  /** null when Frost has nothing to load (no email or no routes). */
+  config: CaddyConfig | null;
+  frostDomain?: string;
+  serviceDomains: number;
+  staging: boolean;
+}
+
+/**
+ * Computes the full Caddy config Frost wants loaded, from the current DB
+ * state, without touching Caddy. Used by syncCaddyConfig and by the drift
+ * reconciler.
+ */
+export async function computeDesiredCaddyConfig(): Promise<DesiredCaddyConfig> {
   const frostDomain = await getSetting("domain");
   const email = await getSetting("email");
   const staging = (await getSetting("ssl_staging")) === "true";
@@ -509,7 +524,7 @@ async function doSyncCaddyConfig(): Promise<SyncResult> {
   const dnsApiToken = await getSetting("dns_api_token");
 
   if (!email) {
-    return { synced: false, serviceDomains: 0, staging };
+    return { config: null, serviceDomains: 0, staging };
   }
 
   const verifiedDomains = await db
@@ -588,7 +603,7 @@ async function doSyncCaddyConfig(): Promise<SyncResult> {
   const routes = Array.from(routeMap.values());
 
   if (routes.length === 0) {
-    return { synced: false, serviceDomains: 0, staging };
+    return { config: null, serviceDomains: 0, staging };
   }
 
   const wildcardConfig: WildcardConfig | undefined =
@@ -599,12 +614,29 @@ async function doSyncCaddyConfig(): Promise<SyncResult> {
         }
       : undefined;
 
-  const config = buildCaddyConfig(routes, email, staging, wildcardConfig);
+  return {
+    config: buildCaddyConfig(routes, email, staging, wildcardConfig),
+    frostDomain: frostDomain ?? undefined,
+    serviceDomains: verifiedDomains.length,
+    staging,
+  };
+}
 
+async function doSyncCaddyConfig(): Promise<SyncResult> {
+  const desired = await computeDesiredCaddyConfig();
+  if (!desired.config) {
+    return { synced: false, serviceDomains: 0, staging: desired.staging };
+  }
+
+  // This replaces Caddy's entire config, including the IP-only route from
+  // the install-time Caddyfile (`<server-ip> { tls internal ... }`), so after
+  // the first sync the dashboard is reached via the Frost domain. Caddy
+  // autosaves every /load and the systemd unit runs `caddy run --resume`,
+  // so this config survives Caddy restarts.
   const res = await fetch(`${CADDY_ADMIN}/load`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(config),
+    body: JSON.stringify(desired.config),
   });
 
   if (!res.ok) {
@@ -612,11 +644,10 @@ async function doSyncCaddyConfig(): Promise<SyncResult> {
     throw new Error(`Failed to sync Caddy config: ${text}`);
   }
 
-  const serviceDomains = verifiedDomains.length;
   return {
     synced: true,
-    frostDomain: frostDomain ?? undefined,
-    serviceDomains,
-    staging,
+    frostDomain: desired.frostDomain,
+    serviceDomains: desired.serviceDomains,
+    staging: desired.staging,
   };
 }

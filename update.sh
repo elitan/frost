@@ -128,6 +128,32 @@ ensure_cleanup_script_executable() {
   fi
 }
 
+# Frost loads Caddy's config through the admin API. Older units started Caddy
+# from the static IP-only Caddyfile, dropping every domain route on restart,
+# and ExecReload force-reloaded that Caddyfile over the API config. Migrate to
+# `--resume` (Caddy's autosave of the last loaded config, Caddyfile only as
+# first-boot fallback) and drop ExecReload. Idempotent; never restarts Caddy:
+# the running process keeps its config and picks up the unit on next start.
+migrate_caddy_unit() {
+  local unit=/etc/systemd/system/caddy.service
+  local changed=0
+  [ -f "$unit" ] || return 0
+
+  if grep -q '^ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile$' "$unit"; then
+    sed -i 's|^ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile$|ExecStart=/usr/bin/caddy run --environ --resume --config /etc/caddy/Caddyfile|' "$unit"
+    changed=1
+  fi
+  if grep -q '^ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile' "$unit"; then
+    sed -i '\|^ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile|d' "$unit"
+    changed=1
+  fi
+
+  if [ "$changed" -eq 1 ]; then
+    log "Migrated Caddy unit to resume autosaved config on restart"
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+}
+
 ensure_cleanup_api_key() {
   local env_file="$FROST_DIR/.env"
   local jwt_secret
@@ -439,6 +465,9 @@ log "Upgrading bun..."
 curl -fsSL https://bun.sh/install 2>/dev/null | bash > /dev/null 2>&1 || true
 
 mkdir -p /usr/local/bin
+
+# Before any Caddy (re)start below, so it resumes the autosaved config
+migrate_caddy_unit
 
 # Install Caddy with DNS modules if missing (pinned; update when upgrading Caddy)
 CADDY_VERSION="v2.10.2"
