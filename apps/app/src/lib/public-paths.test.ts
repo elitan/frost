@@ -13,7 +13,7 @@ describe("public paths", () => {
 
   test("keeps prefix matching for well-known routes only", () => {
     expect(isPublicPath("/.well-known/acme-challenge/token")).toBe(true);
-    expect(isPublicPath("/api/docs")).toBe(true);
+    expect(isPublicPath("/api/docs")).toBe(false);
     expect(isPublicPath("/api/docs/anything")).toBe(false);
   });
 });

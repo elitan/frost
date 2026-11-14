@@ -35,8 +35,8 @@ export default function SetupPage() {
     const password = formData.get("password") as string;
     const confirmPassword = formData.get("confirmPassword") as string;
 
-    if (password.length < 4) {
-      setPasswordError("Password must be at least 4 characters");
+    if (password.length < 12) {
+      setPasswordError("Password must be at least 12 characters");
       return;
     }
 
@@ -95,7 +95,7 @@ export default function SetupPage() {
                   type="password"
                   required
                   autoFocus
-                  minLength={4}
+                  minLength={12}
                   className="border-neutral-700 bg-neutral-800 text-neutral-100"
                 />
                 {passwordError && (
@@ -112,7 +112,7 @@ export default function SetupPage() {
                   name="confirmPassword"
                   type="password"
                   required
-                  minLength={4}
+                  minLength={12}
                   className="border-neutral-700 bg-neutral-800 text-neutral-100"
                 />
                 {confirmError && (

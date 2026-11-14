@@ -11,11 +11,6 @@ type DemoState = {
   enabled: boolean;
 };
 
-type LoginRateLimitEntry = {
-  count: number;
-  resetAt: number;
-};
-
 type CookieCall = {
   name: string;
   options: Record<string, unknown>;
@@ -58,10 +53,7 @@ function resetState() {
   demoState.enabled = false;
   cookieCalls.length = 0;
   jsonCalls.length = 0;
-  const g = globalThis as typeof globalThis & {
-    __demoLoginRateLimit?: Map<string, LoginRateLimitEntry>;
-  };
-  g.__demoLoginRateLimit?.clear();
+  (globalThis as { __loginRateLimit?: unknown }).__loginRateLimit = undefined;
 }
 
 mock.module("next/server", () => ({
@@ -107,10 +99,6 @@ mock.module("@/lib/auth", () => ({
 }));
 
 mock.module("@/lib/demo-mode", () => ({
-  DEMO_MODE_LIMITS: {
-    loginWindowMs: 60 * 1000,
-    loginMaxAttemptsPerWindow: 2,
-  },
   isDemoMode: function isDemoMode() {
     return demoState.enabled;
   },
@@ -250,46 +238,47 @@ describe("login route", () => {
     expect(cookieCalls[0]?.options.secure).toBe(true);
   });
 
-  test("uses x-real-ip for demo login rate limiting", async () => {
+  test("rate limits failed logins per client ip outside demo mode", async () => {
     setNodeEnv("production");
-    demoState.enabled = true;
     authState.validHash = false;
 
-    await callLoginRouteWithIp("198.51.100.22", "1.1.1.1");
-    await callLoginRouteWithIp("198.51.100.22", "2.2.2.2");
-    await callLoginRouteWithIp("198.51.100.22", "3.3.3.3");
-
-    expect(jsonCalls).toHaveLength(3);
-    expect(jsonCalls[0]?.init?.status).toBe(401);
-    expect(jsonCalls[1]?.init?.status).toBe(401);
-    expect(jsonCalls[2]?.init?.status).toBe(429);
-  });
-
-  test("evicts expired demo rate-limit entries on lookup", async () => {
-    setNodeEnv("production");
-    demoState.enabled = true;
-    authState.validHash = false;
-
-    await callLoginRouteWithConfig({
-      body: { password: "secret" },
-      headers: { "x-real-ip": "198.51.100.33" },
-    });
-
-    const g = globalThis as typeof globalThis & {
-      __demoLoginRateLimit?: Map<string, LoginRateLimitEntry>;
-    };
-    const entry = g.__demoLoginRateLimit?.get("198.51.100.33");
-    if (entry) {
-      entry.resetAt = Date.now() - 1;
-      g.__demoLoginRateLimit?.set("198.51.100.33", entry);
+    for (let i = 0; i < 11; i++) {
+      await callLoginRouteWithIp("198.51.100.22", `203.0.113.${i}, 10.0.0.1`);
     }
 
-    await callLoginRouteWithConfig({
-      body: {},
-      headers: { "x-real-ip": "198.51.100.33" },
-    });
+    expect(jsonCalls).toHaveLength(11);
+    expect(jsonCalls[9]?.init?.status).toBe(401);
+    expect(jsonCalls[10]?.init?.status).toBe(429);
+  });
 
-    expect(g.__demoLoginRateLimit?.has("198.51.100.33")).toBe(false);
-    expect(jsonCalls[1]?.init?.status).toBe(400);
+  test("keys rate limit on last x-forwarded-for hop, ignoring x-real-ip", async () => {
+    setNodeEnv("production");
+    authState.validHash = false;
+
+    for (let i = 0; i < 10; i++) {
+      await callLoginRouteWithIp(`198.51.100.${i}`, "6.6.6.6, 10.0.0.1");
+    }
+    await callLoginRouteWithIp("198.51.100.99", "7.7.7.7, 10.0.0.1");
+    await callLoginRouteWithIp("198.51.100.99", "7.7.7.7, 10.0.0.2");
+
+    expect(jsonCalls[10]?.init?.status).toBe(429);
+    expect(jsonCalls[11]?.init?.status).toBe(401);
+  });
+
+  test("successful login clears the per-ip failure count", async () => {
+    setNodeEnv("production");
+    authState.validHash = false;
+    for (let i = 0; i < 9; i++) {
+      await callLoginRouteWithIp("x", "10.0.0.5");
+    }
+    authState.validHash = true;
+    await callLoginRouteWithIp("x", "10.0.0.5");
+    authState.validHash = false;
+    for (let i = 0; i < 5; i++) {
+      await callLoginRouteWithIp("x", "10.0.0.5");
+    }
+
+    expect(jsonCalls[9]?.body).toEqual({ success: true });
+    expect(jsonCalls[14]?.init?.status).toBe(401);
   });
 });

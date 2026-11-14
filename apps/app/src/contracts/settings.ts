@@ -74,6 +74,7 @@ export const settingsContract = {
         z.object({
           manifest: z.record(z.string(), z.unknown()),
           domain: z.string(),
+          state: z.string(),
         }),
       ),
 
@@ -102,7 +103,7 @@ export const settingsContract = {
     .input(
       z.object({
         currentPassword: z.string(),
-        newPassword: z.string().min(4),
+        newPassword: z.string().min(12),
       }),
     )
     .output(z.object({ success: z.boolean() })),

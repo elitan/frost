@@ -1,21 +1,35 @@
 import { randomBytes } from "node:crypto";
+import { sql } from "kysely";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getDemoModeBlockedMessage, isDemoMode } from "@/lib/demo-mode";
 import { newOauthClientId } from "@/lib/id";
+import { isValidRedirectUri } from "@/lib/oauth";
+import { getClientIp } from "@/lib/request-utils";
 
 const REGISTER_WINDOW_MS = 60 * 1000;
 const REGISTER_MAX_REQUESTS = 20;
+const REGISTER_GLOBAL_WINDOW_MS = 60 * 60 * 1000;
+const REGISTER_GLOBAL_MAX = 100;
+const REGISTER_MAX_TRACKED_IPS = 10_000;
 const MAX_REDIRECT_URIS = 10;
 const MAX_CLIENT_NAME_LENGTH = 120;
 
-const g = globalThis as typeof globalThis & {
-  __oauthRegisterLimit?: Map<string, { count: number; resetAt: number }>;
+type RegisterLimitState = {
+  ips: Map<string, { count: number; resetAt: number }>;
+  global: { count: number; resetAt: number };
 };
-if (!g.__oauthRegisterLimit) {
-  g.__oauthRegisterLimit = new Map();
+
+const g = globalThis as typeof globalThis & {
+  __oauthRegisterLimitState?: RegisterLimitState;
+};
+if (!g.__oauthRegisterLimitState) {
+  g.__oauthRegisterLimitState = {
+    ips: new Map(),
+    global: { count: 0, resetAt: 0 },
+  };
 }
-const registerLimit = g.__oauthRegisterLimit;
+const registerLimit = g.__oauthRegisterLimitState;
 
 export async function POST(request: Request) {
   if (isDemoMode()) {
@@ -28,7 +42,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const clientAddress = getClientAddress(request);
+  const clientAddress = getClientIp(request);
   if (isRateLimited(clientAddress)) {
     return NextResponse.json(
       {
@@ -87,10 +101,17 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error: "invalid_client_metadata",
-        error_description: "redirect_uris must be valid http/https URLs",
+        error_description:
+          "redirect_uris must be https URLs (http allowed only for localhost)",
       },
       { status: 400 },
     );
+  }
+
+  try {
+    await deleteStaleClients();
+  } catch (error) {
+    console.error("failed to delete stale oauth clients", error);
   }
 
   const id = newOauthClientId();
@@ -119,45 +140,70 @@ export async function POST(request: Request) {
   );
 }
 
-function getClientAddress(request: Request): string {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) {
-    const first = forwardedFor.split(",")[0]?.trim();
-    if (first) return first;
-  }
-
-  const realIp = request.headers.get("x-real-ip");
-  if (realIp) return realIp;
-
-  return "unknown";
-}
-
 function isRateLimited(clientAddress: string): boolean {
   const now = Date.now();
-  const entry = registerLimit.get(clientAddress);
 
-  if (!entry || entry.resetAt <= now) {
-    registerLimit.set(clientAddress, {
+  const global = registerLimit.global;
+  if (global.resetAt <= now) {
+    global.count = 0;
+    global.resetAt = now + REGISTER_GLOBAL_WINDOW_MS;
+  }
+  if (global.count >= REGISTER_GLOBAL_MAX) return true;
+
+  const entry = registerLimit.ips.get(clientAddress);
+  if (entry && entry.resetAt > now) {
+    if (entry.count >= REGISTER_MAX_REQUESTS) return true;
+    entry.count += 1;
+  } else {
+    if (registerLimit.ips.size >= REGISTER_MAX_TRACKED_IPS) {
+      pruneRateLimitEntries(now);
+    }
+    registerLimit.ips.set(clientAddress, {
       count: 1,
       resetAt: now + REGISTER_WINDOW_MS,
     });
-    return false;
   }
 
-  if (entry.count >= REGISTER_MAX_REQUESTS) return true;
-
-  registerLimit.set(clientAddress, {
-    count: entry.count + 1,
-    resetAt: entry.resetAt,
-  });
+  global.count += 1;
   return false;
 }
 
-function isValidRedirectUri(uri: string): boolean {
-  try {
-    const parsed = new URL(uri);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
+function pruneRateLimitEntries(now: number): void {
+  for (const [address, entry] of registerLimit.ips) {
+    if (entry.resetAt <= now) registerLimit.ips.delete(address);
   }
+  let excess = registerLimit.ips.size - REGISTER_MAX_TRACKED_IPS + 1;
+  for (const address of registerLimit.ips.keys()) {
+    if (excess <= 0) break;
+    registerLimit.ips.delete(address);
+    excess -= 1;
+  }
+}
+
+// Dynamic registration is unauthenticated, so drop abandoned clients: older
+// than 24h with no tokens and no pending codes.
+async function deleteStaleClients(): Promise<void> {
+  await db
+    .deleteFrom("oauthClients")
+    .where("createdAt", "<", sql<string>`datetime('now', '-1 day')`)
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom("oauthTokens")
+            .select("oauthTokens.id")
+            .whereRef("oauthTokens.clientId", "=", "oauthClients.clientId"),
+        ),
+      ),
+    )
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom("oauthCodes")
+            .select("oauthCodes.id")
+            .whereRef("oauthCodes.clientId", "=", "oauthClients.clientId")
+            .where("oauthCodes.expiresAt", ">", new Date().toISOString()),
+        ),
+      ),
+    )
+    .execute();
 }

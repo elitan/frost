@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getDemoModeBlockedMessage, isDemoMode } from "@/lib/demo-mode";
 import { newOauthCodeId } from "@/lib/id";
-import { generateCode, getAuthCodeExpiry, hashOAuthToken } from "@/lib/oauth";
+import {
+  generateCode,
+  getAuthCodeExpiry,
+  getRedirectHostLabel,
+  hashOAuthToken,
+  isValidRedirectUri,
+} from "@/lib/oauth";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -50,7 +56,10 @@ export async function GET(request: Request) {
   }
 
   const registeredUris: string[] = JSON.parse(client.redirectUris);
-  if (!registeredUris.includes(redirectUri)) {
+  if (
+    !registeredUris.includes(redirectUri) ||
+    !isValidRedirectUri(redirectUri)
+  ) {
     return NextResponse.json(
       {
         error: "invalid_request",
@@ -61,6 +70,7 @@ export async function GET(request: Request) {
   }
 
   const clientName = client.clientName ?? "Unknown Application";
+  const redirectHost = getRedirectHostLabel(redirectUri);
   const authorizeUrl = url.toString();
 
   const html = `<!DOCTYPE html>
@@ -76,6 +86,9 @@ export async function GET(request: Request) {
     h1 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
     p { font-size: 14px; color: #a3a3a3; margin-bottom: 24px; }
     .app-name { color: #fff; font-weight: 500; }
+    .redirect { background: #0a0a0a; border: 1px solid #404040; border-radius: 8px; padding: 12px; margin-bottom: 24px; font-size: 13px; color: #a3a3a3; }
+    .redirect-host { display: block; margin-top: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; color: #fff; word-break: break-all; }
+    .warning { font-size: 12px; color: #a3a3a3; margin-bottom: 24px; }
     .buttons { display: flex; gap: 12px; }
     button { flex: 1; padding: 10px 16px; border-radius: 8px; border: none; font-size: 14px; font-weight: 500; cursor: pointer; }
     .approve { background: #fff; color: #0a0a0a; }
@@ -87,7 +100,12 @@ export async function GET(request: Request) {
 <body>
   <div class="card">
     <h1>Authorize Access</h1>
-    <p><span class="app-name">${escapeHtml(clientName)}</span> wants to access your Frost instance.</p>
+    <p><span class="app-name">${escapeHtml(clientName)}</span> wants full access to your Frost instance.</p>
+    <div class="redirect">
+      After approval you will be redirected to
+      <span class="redirect-host">${escapeHtml(redirectHost)}</span>
+    </div>
+    <p class="warning">The application name is self-reported. Only approve if you started this request and trust <strong>${escapeHtml(redirectHost)}</strong>.</p>
     <div class="buttons">
       <form method="POST" action="${escapeHtml(authorizeUrl)}" style="flex:1;display:flex;">
         <input type="hidden" name="action" value="deny">
@@ -165,7 +183,10 @@ export async function POST(request: Request) {
   }
 
   const registeredUris: string[] = JSON.parse(client.redirectUris);
-  if (!registeredUris.includes(redirectUri)) {
+  if (
+    !registeredUris.includes(redirectUri) ||
+    !isValidRedirectUri(redirectUri)
+  ) {
     return NextResponse.json(
       {
         error: "invalid_request",

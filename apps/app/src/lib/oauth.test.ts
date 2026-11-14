@@ -6,7 +6,9 @@ import {
   generateRefreshToken,
   getAccessTokenExpiry,
   getAccessTokenTtlSeconds,
+  getRedirectHostLabel,
   hashOAuthToken,
+  isValidRedirectUri,
   verifyPKCE,
 } from "./oauth";
 
@@ -91,6 +93,39 @@ describe("oauth", () => {
     test("returns false for tampered challenge", () => {
       const verifier = "my-verifier";
       expect(verifyPKCE(verifier, "tampered-challenge")).toBe(false);
+    });
+  });
+
+  describe("isValidRedirectUri", () => {
+    test("allows https anywhere", () => {
+      expect(
+        isValidRedirectUri("https://claude.ai/api/mcp/auth_callback"),
+      ).toBe(true);
+    });
+
+    test("allows http only for loopback hosts", () => {
+      expect(isValidRedirectUri("http://localhost:9999/callback")).toBe(true);
+      expect(isValidRedirectUri("http://127.0.0.1:8080/cb")).toBe(true);
+      expect(isValidRedirectUri("http://[::1]:8080/cb")).toBe(true);
+      expect(isValidRedirectUri("http://evil.example.com/cb")).toBe(false);
+      expect(isValidRedirectUri("http://localhost.evil.com/cb")).toBe(false);
+      expect(isValidRedirectUri("http://10.0.0.1/cb")).toBe(false);
+    });
+
+    test("rejects other schemes, fragments and credentials", () => {
+      expect(isValidRedirectUri("javascript:alert(1)")).toBe(false);
+      expect(isValidRedirectUri("ftp://example.com/cb")).toBe(false);
+      expect(isValidRedirectUri("https://example.com/cb#frag")).toBe(false);
+      expect(isValidRedirectUri("https://user:pw@example.com/cb")).toBe(false);
+      expect(isValidRedirectUri("not a url")).toBe(false);
+    });
+  });
+
+  describe("getRedirectHostLabel", () => {
+    test("returns host with port", () => {
+      expect(getRedirectHostLabel("https://evil.example.com:8443/cb")).toBe(
+        "evil.example.com:8443",
+      );
     });
   });
 });

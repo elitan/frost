@@ -8,11 +8,24 @@ import {
 import { isDemoMode } from "./lib/demo-mode";
 import { verifyOAuthToken } from "./lib/oauth";
 import { isPublicPath } from "./lib/public-paths";
+import { isSafeMethod, isSameOriginRequest } from "./lib/request-utils";
 
 export async function proxy(request: NextRequest) {
+  const demoMode = isDemoMode();
+  const response = await authorize(request, demoMode);
+  if (!demoMode) {
+    response.headers.set("X-Frame-Options", "DENY");
+    response.headers.set("Content-Security-Policy", "frame-ancestors 'none'");
+  }
+  return response;
+}
+
+async function authorize(
+  request: NextRequest,
+  demoMode: boolean,
+): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
   const isApi = pathname.startsWith("/api/");
-  const demoMode = isDemoMode();
 
   if (isPublicPath(pathname)) {
     return NextResponse.next();
@@ -57,6 +70,12 @@ export async function proxy(request: NextRequest) {
 
   const sessionToken = request.cookies.get("frost_session")?.value;
   if (sessionToken && verifySessionToken(sessionToken)) {
+    if (!isSafeMethod(request.method) && !isSameOriginRequest(request)) {
+      return NextResponse.json(
+        { error: "cross-origin request blocked" },
+        { status: 403 },
+      );
+    }
     return NextResponse.next();
   }
 

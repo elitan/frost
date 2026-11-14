@@ -74,16 +74,6 @@ async function handleAuthorizationCode(body: Record<string, string>) {
     );
   }
 
-  if (codeRecord.used) {
-    return NextResponse.json(
-      {
-        error: "invalid_grant",
-        error_description: "Authorization code already used",
-      },
-      { status: 400 },
-    );
-  }
-
   if (new Date(codeRecord.expiresAt).getTime() < Date.now()) {
     return NextResponse.json(
       {
@@ -115,11 +105,29 @@ async function handleAuthorizationCode(body: Record<string, string>) {
     );
   }
 
-  await db
+  const claim = await db
     .updateTable("oauthCodes")
     .set({ used: 1 })
     .where("id", "=", codeRecord.id)
-    .execute();
+    .where("used", "=", 0)
+    .executeTakeFirst();
+
+  if (Number(claim.numUpdatedRows) !== 1) {
+    // Code replay (RFC 6749 10.5): revoke tokens issued from this code,
+    // i.e. this client's tokens created since the code was issued.
+    await db
+      .deleteFrom("oauthTokens")
+      .where("clientId", "=", codeRecord.clientId)
+      .where("createdAt", ">=", codeRecord.createdAt)
+      .execute();
+    return NextResponse.json(
+      {
+        error: "invalid_grant",
+        error_description: "Authorization code already used",
+      },
+      { status: 400 },
+    );
+  }
 
   return issueTokenPair(client_id);
 }
@@ -163,7 +171,17 @@ async function handleRefreshToken(body: Record<string, string>) {
     );
   }
 
-  await db.deleteFrom("oauthTokens").where("id", "=", tokenRecord.id).execute();
+  const rotated = await db
+    .deleteFrom("oauthTokens")
+    .where("id", "=", tokenRecord.id)
+    .executeTakeFirst();
+
+  if (Number(rotated.numDeletedRows) !== 1) {
+    return NextResponse.json(
+      { error: "invalid_grant", error_description: "Invalid refresh token" },
+      { status: 400 },
+    );
+  }
 
   return issueTokenPair(client_id);
 }

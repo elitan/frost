@@ -408,6 +408,15 @@ ensure_cleanup_script_executable
 # Ensure FROST_DATA_DIR is set (required since v0.8.0 monorepo)
 if [ -f "$FROST_DIR/.env" ]; then
   grep -q FROST_DATA_DIR "$FROST_DIR/.env" || echo "FROST_DATA_DIR=$FROST_DIR/data" >> "$FROST_DIR/.env"
+  # Bind loopback only; Caddy proxies public traffic to localhost:3000
+  grep -q '^HOSTNAME=' "$FROST_DIR/.env" || echo "HOSTNAME=127.0.0.1" >> "$FROST_DIR/.env"
+fi
+
+# git mode runs `next start`, which ignores HOSTNAME; pass --hostname instead
+FROST_UNIT=/etc/systemd/system/frost.service
+if [ -f "$FROST_UNIT" ] && grep -q '^ExecStart=/usr/local/bin/bun run start$' "$FROST_UNIT"; then
+  sed -i 's|^ExecStart=/usr/local/bin/bun run start$|ExecStart=/usr/local/bin/bun run start --hostname 127.0.0.1|' "$FROST_UNIT"
+  systemctl daemon-reload 2>/dev/null || true
 fi
 
 # Ensure .env symlink exists for monorepo (apps/app needs access to root .env)
@@ -550,7 +559,7 @@ if [ "$GIT_MODE" = true ]; then
     log "Creating .env symlink for monorepo..."
     ln -sf "$FROST_DIR/.env" "$FROST_DIR/apps/app/.env"
     log "Updating systemd service for git mode..."
-    sed -i 's|ExecStart=.*|ExecStart=/usr/local/bin/bun run start|' /etc/systemd/system/frost.service
+    sed -i 's|ExecStart=.*|ExecStart=/usr/local/bin/bun run start --hostname 127.0.0.1|' /etc/systemd/system/frost.service
     if grep -q '^TimeoutStartSec=' /etc/systemd/system/frost.service; then
       sed -i 's|^TimeoutStartSec=.*|TimeoutStartSec=900|' /etc/systemd/system/frost.service
     else

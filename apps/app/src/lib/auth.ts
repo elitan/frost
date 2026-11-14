@@ -40,6 +40,7 @@ export async function verifyPassword(
   const keyBuffer = Buffer.from(key, "hex");
   const derived = (await scryptAsync(password, salt, 64)) as Buffer;
 
+  if (keyBuffer.length !== derived.length) return false;
   return timingSafeEqual(keyBuffer, derived);
 }
 
@@ -60,8 +61,7 @@ export function verifySessionToken(token: string): boolean {
   const [data, signature] = token.split(".");
   if (!data || !signature) return false;
 
-  const expectedSignature = createSignature(data);
-  if (signature !== expectedSignature) return false;
+  if (!safeEqual(signature, createSignature(data))) return false;
 
   try {
     const payload = JSON.parse(
@@ -71,6 +71,13 @@ export function verifySessionToken(token: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function safeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
 }
 
 function createSignature(data: string): string {

@@ -88,3 +88,29 @@ function getAccessTokenTtlMs(): number {
   }
   return Math.floor(ttlDays * 24 * 60 * 60 * 1000);
 }
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+// https anywhere; plain http only for native-app loopback redirects (RFC 8252).
+export function isValidRedirectUri(uri: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    return false;
+  }
+  if (parsed.hash || parsed.username || parsed.password) return false;
+  if (parsed.protocol === "https:") return parsed.hostname.length > 0;
+  if (parsed.protocol === "http:") {
+    return LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase());
+  }
+  return false;
+}
+
+export function getRedirectHostLabel(uri: string): string {
+  try {
+    return new URL(uri).host;
+  } catch {
+    return uri;
+  }
+}
