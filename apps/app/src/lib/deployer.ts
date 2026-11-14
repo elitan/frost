@@ -4,10 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Selectable, sql } from "kysely";
 import { getSetting } from "./auth";
-import {
-  envVarListToRecord,
-  selectBuildTimeEnvVars,
-} from "./build-env";
+import { envVarListToRecord, selectBuildTimeEnvVars } from "./build-env";
 import { emitBuildLogChunk } from "./build-log-stream";
 import { buildContainerCommandOptions } from "./container-command";
 import { decrypt } from "./crypto";
