@@ -16,6 +16,28 @@ export const settingsContract = {
     }),
   ),
 
+  systemBackup: oc
+    .route({ method: "GET", path: "/settings/system-backup" })
+    .output(
+      z.object({
+        localDir: z.string(),
+        snapshots: z.array(
+          z.object({
+            name: z.string(),
+            kind: z.enum(["daily", "pre-migration"]),
+            size: z.number(),
+            createdAt: z.number(),
+          }),
+        ),
+        lastSnapshotAt: z.number().nullable(),
+        lastSnapshotError: z.string().nullable(),
+        offsiteDestination: z.string().nullable(),
+        lastOffsiteAt: z.number().nullable(),
+        lastOffsiteError: z.string().nullable(),
+        running: z.boolean(),
+      }),
+    ),
+
   verifyDns: oc
     .route({ method: "POST", path: "/settings/verify-dns" })
     .input(z.object({ domain: domainNameSchema }))

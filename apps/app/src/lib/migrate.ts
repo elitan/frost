@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { createSnapshotWithConnection } from "./frost-db-snapshot";
 import { getDbPath } from "./paths";
 
 const alphabet =
@@ -122,7 +123,7 @@ export function runMigrations(options?: MigrationOptions): MigrationResult {
   sqlite.exec("PRAGMA foreign_keys = ON");
 
   try {
-    const result = runMigrationsWithDb(sqlite, schemaDir);
+    const result = runMigrationsWithDb(sqlite, schemaDir, dbPath);
     const schemaUpgrades = runSchemaUpgrades(sqlite);
     return { ...result, schemaUpgrades };
   } finally {
@@ -171,9 +172,32 @@ function markRenamedMigrations(sqlite: Database): void {
   }
 }
 
+function snapshotBeforeMigrations(
+  sqlite: Database,
+  dbPath: string,
+  pendingCount: number,
+): void {
+  if (dbPath === ":memory:" || process.env.FROST_SKIP_PRE_MIGRATION_BACKUP) {
+    return;
+  }
+  try {
+    const path = createSnapshotWithConnection(sqlite, dbPath, "pre-migration");
+    console.log(
+      `[migrate] Snapshot before ${pendingCount} pending migration(s): ${path}`,
+    );
+  } catch (err) {
+    console.error("[migrate] Pre-migration snapshot failed:", err);
+    throw new Error(
+      "Pre-migration snapshot failed; refusing to migrate. Free disk space or set FROST_SKIP_PRE_MIGRATION_BACKUP=1 to skip.",
+      { cause: err },
+    );
+  }
+}
+
 function runMigrationsWithDb(
   sqlite: Database,
   schemaDir: string,
+  dbPath: string,
 ): Omit<MigrationResult, "schemaUpgrades"> {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS _migrations (
@@ -212,6 +236,13 @@ function runMigrationsWithDb(
       `[migrate] Bootstrapped ${migrationFiles.length} existing migrations`,
     );
     return { applied: 0, bootstrapped: true };
+  }
+
+  const pendingCount = migrationFiles.filter(function isPending(file) {
+    return !appliedSet.has(file);
+  }).length;
+  if (hasExistingDb && pendingCount > 0) {
+    snapshotBeforeMigrations(sqlite, dbPath, pendingCount);
   }
 
   let appliedCount = 0;

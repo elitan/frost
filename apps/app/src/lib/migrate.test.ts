@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { getSnapshotDir, listSnapshots } from "./frost-db-snapshot";
 import { runMigrations, validateMigrationFiles } from "./migrate";
 
 const TEST_DIR = join(process.cwd(), "test-migrate-tmp");
@@ -52,6 +53,41 @@ describe("runMigrations", () => {
     expect(tableNames).toContain("users");
     expect(tableNames).toContain("posts");
     expect(tableNames).toContain("_migrations");
+  });
+
+  test("snapshots an existing database only when migrations are pending", () => {
+    writeFileSync(
+      join(TEST_SCHEMA_DIR, "001-init.sql"),
+      "CREATE TABLE projects (id TEXT PRIMARY KEY); INSERT INTO projects VALUES ('p1');",
+    );
+    runMigrations({ dbPath: TEST_DB, schemaDir: TEST_SCHEMA_DIR });
+    expect(existsSync(getSnapshotDir(TEST_DB))).toBe(false);
+
+    runMigrations({ dbPath: TEST_DB, schemaDir: TEST_SCHEMA_DIR });
+    expect(existsSync(getSnapshotDir(TEST_DB))).toBe(false);
+
+    writeFileSync(
+      join(TEST_SCHEMA_DIR, "002-posts.sql"),
+      "CREATE TABLE posts (id INTEGER PRIMARY KEY);",
+    );
+    const result = runMigrations({
+      dbPath: TEST_DB,
+      schemaDir: TEST_SCHEMA_DIR,
+    });
+    expect(result.applied).toBe(1);
+
+    const snapshots = listSnapshots(getSnapshotDir(TEST_DB));
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].kind).toBe("pre-migration");
+
+    const snap = new Database(snapshots[0].path, { readonly: true });
+    const tables = snap
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>;
+    const rows = snap.prepare("SELECT id FROM projects").all();
+    snap.close();
+    expect(tables.map((t) => t.name)).not.toContain("posts");
+    expect(rows).toEqual([{ id: "p1" }]);
   });
 
   test("skips already applied migrations", () => {

@@ -108,6 +108,37 @@ E2E_BATCH_SIZE=4 E2E_START_STAGGER_SEC=1 bun run e2e:local
 Image pull retries are built in:
 `FROST_IMAGE_PULL_RETRIES`, `FROST_IMAGE_PULL_BACKOFF_MS`, `FROST_IMAGE_PULL_MAX_BACKOFF_MS`.
 
+## Backing up Frost itself
+
+Frost snapshots its own SQLite database (`frost.db`: projects, encrypted
+secrets, backup configs) with `VACUUM INTO`:
+
+- daily, into `<data-dir>/backups/frost-daily-<timestamp>.db` (last 7 kept)
+- right before applying migrations to an existing database, into
+  `<data-dir>/backups/frost-pre-migration-<timestamp>.db` (last 5 kept)
+
+If a Postgres backup S3 destination is enabled, each daily snapshot is also
+uploaded to `s3://<bucket>/<prefix>/frost-system/` and kept for 14 days. With
+several destinations, the oldest enabled one (by creation time) is used.
+Status is shown under Settings > Frost Database Backups and at
+`GET /api/settings/system-backup`.
+
+Snapshots contain encrypted secrets; keep `FROST_JWT_SECRET` (in
+`/opt/frost/.env`) backed up separately or they cannot be decrypted.
+
+To restore (default install, data in `/opt/frost/data`):
+
+```bash
+systemctl stop frost
+# release installs: /opt/frost/scripts, git installs: /opt/frost/apps/app/scripts
+/opt/frost/scripts/restore-frost-db.sh /opt/frost/data/backups/frost-daily-<timestamp>.db
+# or by hand: rm -f frost.db-wal frost.db-shm && cp <snapshot> /opt/frost/data/frost.db
+systemctl start frost
+```
+
+For an offsite copy, download it from the bucket first. The script saves the
+current `frost.db` next to it before overwriting.
+
 ## Requirements
 
 - VPS/server with Docker

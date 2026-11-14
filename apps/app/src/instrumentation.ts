@@ -65,6 +65,10 @@ export async function register() {
     startPostgresBackupScheduler();
     console.log("[startup] postgres backup scheduler: started");
 
+    const { startFrostBackupScheduler } = await import("./lib/frost-db-backup");
+    startFrostBackupScheduler();
+    console.log("[startup] frost database backup scheduler: started");
+
     const { restoreDatabaseTargetGateways } = await import(
       "./lib/database-runtime"
     );

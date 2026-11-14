@@ -19,6 +19,7 @@ import {
   getServerIp,
   syncCaddyConfig,
 } from "@/lib/domains";
+import { getFrostBackupStatus } from "@/lib/frost-db-backup";
 import {
   buildManifest,
   clearGitHubAppCredentials,
@@ -129,6 +130,10 @@ export const settings = {
       serverIp,
       demoMode,
     };
+  }),
+
+  systemBackup: os.settings.systemBackup.handler(async () => {
+    return getFrostBackupStatus();
   }),
 
   verifyDns: os.settings.verifyDns.handler(async ({ input }) => {
