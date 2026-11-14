@@ -1,4 +1,5 @@
 import { getSetting, setSetting } from "@/lib/auth";
+import { isAutoUpdateEnabled } from "@/lib/update-state";
 import {
   applyUpdate,
   checkForUpdate,
@@ -6,6 +7,7 @@ import {
   getCurrentVersion,
   getPersistedUpdateResult,
   getUpdateStatus,
+  persistUpdateResult,
 } from "@/lib/updater";
 import { assertDemoWriteAllowed } from "./demo-guards";
 import { os } from "./orpc";
@@ -30,7 +32,7 @@ async function getAutoUpdateSettings(): Promise<{
   const enabled = await getSetting("auto_update_enabled");
   const hourStr = await getSetting("auto_update_hour");
   return {
-    enabled: enabled !== "false",
+    enabled: isAutoUpdateEnabled(enabled),
     hour: hourStr ? Number.parseInt(hourStr, 10) : DEFAULT_AUTO_UPDATE_HOUR,
   };
 }
@@ -69,6 +71,9 @@ export const updates = {
   }),
 
   getResult: os.updates.getResult.handler(async () => {
+    // update.sh writes its result after the health check, i.e. after this
+    // process started, so pick it up here rather than only at startup
+    await persistUpdateResult();
     const result = await getPersistedUpdateResult();
 
     if (!result) {

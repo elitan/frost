@@ -144,7 +144,8 @@ SQL
   git commit -m "Intentionally broken migration for e2e rollback test"
 fi
 
-git update-ref refs/remotes/origin/main HEAD
+# update.sh checks out the tag named by the update marker (v99.99.99)
+git tag -f v99.99.99 HEAD
 git checkout -f "$BASE_COMMIT"
 git reset --hard "$BASE_COMMIT"
 REMOTE
@@ -169,14 +170,12 @@ echo "=== Copying current update.sh to server ==="
 scp -o StrictHostKeyChecking=no -o LogLevel=ERROR "$(dirname "$0")/../../../update.sh" root@$SERVER_IP:/opt/frost/update.sh
 
 echo ""
-echo "=== Disabling git fetch in update.sh to preserve our fake origin/main ==="
-remote "sed -i 's|git fetch origin main.*|:|' /opt/frost/update.sh"
-
-echo ""
-echo "=== Updating systemd service to use local update.sh ==="
-remote "sed -i 's|curl -fsSL https://raw.githubusercontent.com/.*/update.sh.*bash -s -- --pre-start|/opt/frost/update.sh --pre-start|' /etc/systemd/system/frost.service && \
-  if grep -q '^TimeoutStartSec=' /etc/systemd/system/frost.service; then sed -i 's|^TimeoutStartSec=.*|TimeoutStartSec=900|' /etc/systemd/system/frost.service; else sed -i '/\\[Service\\]/a TimeoutStartSec=900' /etc/systemd/system/frost.service; fi && \
-  systemctl daemon-reload"
+echo "=== Verifying self-update units ==="
+# install.sh creates frost-update.service (runs /opt/frost/update.sh --apply)
+# and a frost.service ExecStartPre hook that only enqueues it.
+remote "test -f /etc/systemd/system/frost-update.service && \
+  grep -q 'frost-update.service' /etc/systemd/system/frost.service && \
+  ! grep -q 'raw.githubusercontent.com' /etc/systemd/system/frost.service"
 
 echo ""
 echo "=== Ensuring sqlite3 is installed ==="
@@ -207,7 +206,7 @@ sleep 5
 
 echo ""
 echo "=== Polling for update result ==="
-for i in $(seq 1 60); do
+for i in $(seq 1 120); do
   RESULT=$(curl -sS --max-time 10 "$BASE_URL/api/updates/result" \
     -H "X-Frost-Token: $API_KEY" 2>/dev/null || echo '{"completed":false}')
   COMPLETED=$(echo "$RESULT" | jq -r '.completed')
@@ -232,7 +231,7 @@ for i in $(seq 1 60); do
     break
   fi
 
-  if [ $i -eq 60 ]; then
+  if [ $i -eq 120 ]; then
     echo ""
     echo "FAIL: Timed out waiting for result"
     remote "journalctl -u frost --no-pager -n 100" || true

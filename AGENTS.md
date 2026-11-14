@@ -234,10 +234,10 @@ Use:
   - `ssh root@<ip> "systemctl status frost --no-pager"`
   - `ssh root@<ip> "systemctl status frost-demo-reset.timer --no-pager"`
 - Update demo instance from latest `main`:
-  - `ssh root@<ip> "cd /opt/frost && ./update.sh --pre-start"`
+  - `ssh root@<ip> "cd /opt/frost && ./update.sh"` (git mode without an update marker falls back to `origin/main`; health-checked, rolls back on failure)
 - Push local changes and deploy:
   - `git push origin main`
-  - `ssh root@<ip> "cd /opt/frost && ./update.sh --pre-start"`
+  - `ssh root@<ip> "cd /opt/frost && ./update.sh"`
 - Force demo reset now:
   - `ssh root@<ip> "systemctl start frost-demo-reset.service"`
 - Tail logs:

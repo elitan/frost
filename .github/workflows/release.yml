@@ -229,6 +229,14 @@ jobs:
           rm -rf frost-release
           ls -lh "frost-v${VERSION}.tar.gz"
 
+      - name: Generate SHA256SUMS
+        run: |
+          VERSION="${{ steps.new.outputs.version }}"
+          # update.sh verifies the tarball and its own release copy against this
+          sha256sum "frost-v${VERSION}.tar.gz" update.sh > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+
       - name: Test tarball
         run: |
           VERSION="${{ steps.new.outputs.version }}"
@@ -267,4 +275,6 @@ jobs:
           gh release create "v${{ steps.new.outputs.version }}" \
             --title "v${{ steps.new.outputs.version }}" \
             --notes-file release_notes.md \
-            "frost-v${{ steps.new.outputs.version }}.tar.gz"
+            "frost-v${{ steps.new.outputs.version }}.tar.gz" \
+            update.sh \
+            SHA256SUMS

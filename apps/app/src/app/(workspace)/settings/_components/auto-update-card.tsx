@@ -49,7 +49,7 @@ export function AutoUpdateCard() {
     }),
   );
 
-  const enabled = data?.enabled ?? true;
+  const enabled = data?.enabled ?? false;
   const utcHour = data?.hour ?? 4;
   const localHour = utcToLocalHour(utcHour);
 
@@ -67,7 +67,7 @@ export function AutoUpdateCard() {
   return (
     <SettingCard
       title="Auto Update"
-      description="Automatically check for and apply updates daily at a scheduled time."
+      description="Automatically apply updates daily at a scheduled time. When off, Frost only notifies you when an update is available."
     >
       <div className="space-y-4">
         {demoMode && (

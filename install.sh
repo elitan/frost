@@ -19,6 +19,8 @@ timer() {
 FROST_DIR="/opt/frost"
 FROST_BIND_HOST="${FROST_BIND_HOST:-127.0.0.1}"
 FROST_REPO="https://github.com/elitan/frost"
+# Pinned bun version (keep in sync with update.sh)
+FROST_BUN_VERSION="1.4.4"
 FROST_VERSION=""
 FROST_BRANCH=""
 USE_TARBALL=true
@@ -271,19 +273,20 @@ $SERVER_IP {
 EOF
 systemctl restart caddy
 
-# Install Bun if not present (needed for setup script)
-if ! command -v bun &> /dev/null; then
-  timer "Installing Bun..."
-  curl -fsSL https://bun.sh/install 2>/dev/null | bash > /dev/null 2>&1
-  export BUN_INSTALL="$HOME/.bun"
-  export PATH="$BUN_INSTALL/bin:$PATH"
-  ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
-else
-  timer "Bun already installed"
-fi
-
+# Install pinned Bun if missing or a different version (needed for setup script)
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
+CURRENT_BUN_VERSION=""
+if [ -x "$BUN_INSTALL/bin/bun" ]; then
+  CURRENT_BUN_VERSION=$("$BUN_INSTALL/bin/bun" --version 2>/dev/null || true)
+fi
+if [ "$CURRENT_BUN_VERSION" != "$FROST_BUN_VERSION" ]; then
+  timer "Installing Bun $FROST_BUN_VERSION..."
+  curl -fsSL https://bun.sh/install 2>/dev/null | bash -s "bun-v$FROST_BUN_VERSION" > /dev/null 2>&1
+else
+  timer "Bun $FROST_BUN_VERSION already installed"
+fi
+ln -sf "$BUN_INSTALL/bin/bun" /usr/local/bin/bun
 
 echo ""
 timer "Setting up Frost..."
@@ -309,8 +312,24 @@ if [ "$USE_TARBALL" = true ]; then
   fi
 
   timer "Downloading Frost $FROST_VERSION..."
+  DOWNLOAD_DIR=$(mktemp -d)
+  TARBALL_NAME="frost-${FROST_VERSION}.tar.gz"
+  curl -fsSL "$TARBALL_URL" -o "$DOWNLOAD_DIR/$TARBALL_NAME"
+  if curl -fsSL "$FROST_REPO/releases/download/$FROST_VERSION/SHA256SUMS" -o "$DOWNLOAD_DIR/SHA256SUMS"; then
+    EXPECTED_SHA=$(awk -v n="$TARBALL_NAME" '$2 == n || $2 == "*" n { print $1; exit }' "$DOWNLOAD_DIR/SHA256SUMS")
+    ACTUAL_SHA=$(sha256sum "$DOWNLOAD_DIR/$TARBALL_NAME" | awk '{print $1}')
+    if [ -z "$EXPECTED_SHA" ] || [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+      echo -e "${RED}Checksum verification failed for $TARBALL_NAME${NC}"
+      rm -rf "$DOWNLOAD_DIR"
+      exit 1
+    fi
+    timer "Verified $TARBALL_NAME (sha256 $ACTUAL_SHA)"
+  else
+    echo -e "${YELLOW}Warning: release $FROST_VERSION has no SHA256SUMS; skipping checksum verification${NC}"
+  fi
   mkdir -p "$FROST_DIR"
-  curl -fsSL "$TARBALL_URL" | tar -xz -C "$FROST_DIR"
+  tar -xzf "$DOWNLOAD_DIR/$TARBALL_NAME" -C "$FROST_DIR"
+  rm -rf "$DOWNLOAD_DIR"
 
   cd "$FROST_DIR"
 
@@ -404,13 +423,31 @@ After=network.target docker.service caddy.service
 Type=simple
 WorkingDirectory=$FROST_DIR
 TimeoutStartSec=900
-ExecStartPre=/bin/bash -c 'test -f $FROST_DIR/data/.update-requested && curl -fsSL https://raw.githubusercontent.com/elitan/frost/main/update.sh | bash -s -- --pre-start || true'
+# Enqueue-only hook: if an update was requested, frost-update.service applies,
+# health checks and (on failure) rolls back. Must match FROST_UPDATE_HOOK in update.sh.
+ExecStartPre=-/bin/sh -c 'test ! -f $FROST_DIR/data/.update-requested || systemctl start --no-block frost-update.service'
 ExecStart=$EXEC_START
 Restart=on-failure
 EnvironmentFile=$FROST_DIR/.env
 
 [Install]
 WantedBy=multi-user.target
+EOF
+
+# Self-update runs in its own unit so it can stop/start frost, health check
+# the new version and roll back. Must match render_update_unit in update.sh.
+cat > /etc/systemd/system/frost-update.service << EOF
+[Unit]
+Description=Frost self-update
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$FROST_DIR
+Environment=HOME=/root
+ExecStart=/bin/bash $FROST_DIR/update.sh --apply
+TimeoutStartSec=3600
 EOF
 
 cat > /etc/systemd/system/frost-cleanup.service << EOF

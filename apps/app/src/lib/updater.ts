@@ -3,6 +3,10 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { promisify } from "node:util";
 import pkg from "../../package.json";
 import { getSetting, setSetting } from "./auth";
+import {
+  parseUpdateResult,
+  UPDATE_SERVICE_TRIGGER_COMMAND,
+} from "./update-state";
 
 const execAsync = promisify(exec);
 
@@ -269,8 +273,15 @@ export async function applyUpdate(): Promise<{
   }
 
   try {
+    // The app stays up while the update downloads/builds, so drop any result
+    // from a previous attempt before the UI starts polling for this one
+    await clearPersistedUpdateResult();
+    clearUpdateResult();
     writeFileSync(UPDATE_MARKER_PATH, availableVersion);
-    execAsync("systemctl restart frost").catch(() => {});
+    // frost-update.service applies the update, health checks the new version
+    // and rolls back on failure. Older units without it fall back to the
+    // restart-triggered ExecStartPre hook.
+    execAsync(UPDATE_SERVICE_TRIGGER_COMMAND).catch(() => {});
     return { success: true };
   } catch (err) {
     return {
@@ -296,21 +307,16 @@ export function getUpdateResult(): UpdateResult {
     return { completed: false, success: false, newVersion: null, log: null };
   }
 
-  const resultContent = readFileSync(UPDATE_RESULT_PATH, "utf-8").trim();
+  const parsed = parseUpdateResult(readFileSync(UPDATE_RESULT_PATH, "utf-8"));
+  if (!parsed.completed) {
+    return { completed: false, success: false, newVersion: null, log: null };
+  }
+
   const log = existsSync(UPDATE_LOG_PATH)
     ? readFileSync(UPDATE_LOG_PATH, "utf-8")
     : null;
 
-  if (resultContent === "failed") {
-    return { completed: true, success: false, newVersion: null, log };
-  }
-
-  if (resultContent.startsWith("success:")) {
-    const newVersion = resultContent.replace("success:", "");
-    return { completed: true, success: true, newVersion, log };
-  }
-
-  return { completed: false, success: false, newVersion: null, log: null };
+  return { ...parsed, log };
 }
 
 export function clearUpdateResult(): void {

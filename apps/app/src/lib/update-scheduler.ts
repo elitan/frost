@@ -1,4 +1,5 @@
 import { getSetting, setSetting } from "./auth";
+import { isAutoUpdateEnabled } from "./update-state";
 import { applyUpdate, checkForUpdate } from "./updater";
 
 const CHECK_INTERVAL_MS = 60 * 1000;
@@ -9,7 +10,7 @@ let lastUpdateDate: string | null = null;
 async function checkAndRun(): Promise<void> {
   try {
     const enabled = await getSetting("auto_update_enabled");
-    if (enabled === "false") return;
+    if (!isAutoUpdateEnabled(enabled)) return;
 
     const now = new Date();
     const today = now.toISOString().split("T")[0];

@@ -15,11 +15,13 @@ UPDATE_MARKER="$FROST_DIR/data/.update-requested"
 UPDATE_LOG="$FROST_DIR/data/.update-log"
 UPDATE_RESULT="$FROST_DIR/data/.update-result"
 BACKUP_DIR="$FROST_DIR/.backup"
-PRE_START=false
-
-if [ "$1" = "--pre-start" ]; then
-  PRE_START=true
-fi
+FROST_UNIT="/etc/systemd/system/frost.service"
+UPDATE_UNIT="/etc/systemd/system/frost-update.service"
+# Must match the line install.sh writes into frost.service
+FROST_UPDATE_HOOK="ExecStartPre=-/bin/sh -c 'test ! -f $UPDATE_MARKER || systemctl start --no-block frost-update.service'"
+# Pinned bun version (keep in sync with install.sh)
+FROST_BUN_VERSION="1.4.4"
+HEALTH_TIMEOUT_SEC="${FROST_UPDATE_HEALTH_TIMEOUT:-90}"
 
 log() {
   echo -e "${YELLOW}$1${NC}"
@@ -358,6 +360,277 @@ ensure_zfs_branching_setup() {
   fi
 }
 
+
+get_package_version() {
+  local file="$1"
+  grep '"version"' "$file" 2>/dev/null | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/'
+}
+
+# ---------------------------------------------------------------------------
+# systemd units
+# ---------------------------------------------------------------------------
+
+render_update_unit() {
+  cat << EOF
+[Unit]
+Description=Frost self-update
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$FROST_DIR
+Environment=HOME=/root
+ExecStart=/bin/bash $FROST_DIR/update.sh --apply
+TimeoutStartSec=3600
+EOF
+}
+
+# Idempotently migrate units to the frost-update.service mechanism:
+# - frost-update.service (oneshot) runs update.sh --apply outside frost's cgroup,
+#   so it can stop/start frost, health check, and roll back.
+# - frost.service's ExecStartPre only enqueues frost-update.service when an
+#   update marker exists (compat for app versions that write the marker and
+#   restart frost). It no longer downloads anything.
+migrate_systemd_units() {
+  local changed=false
+  local desired
+  local current
+
+  if ! command -v systemctl > /dev/null 2>&1; then
+    return 0
+  fi
+
+  desired=$(render_update_unit)
+  current=$(cat "$UPDATE_UNIT" 2>/dev/null || true)
+  if [ "$current" != "$desired" ]; then
+    printf '%s\n' "$desired" > "$UPDATE_UNIT"
+    changed=true
+    log "Installed $UPDATE_UNIT"
+  fi
+
+  if [ -f "$FROST_UNIT" ]; then
+    if grep -q '^ExecStartPre=' "$FROST_UNIT"; then
+      if ! grep -qxF "$FROST_UPDATE_HOOK" "$FROST_UNIT"; then
+        # Replace legacy hooks (curl …/main/update.sh | bash, or local
+        # update.sh --pre-start) with the enqueue-only hook
+        grep -v '^ExecStartPre=.*update' "$FROST_UNIT" > "$FROST_UNIT.tmp" || true
+        mv "$FROST_UNIT.tmp" "$FROST_UNIT"
+        changed=true
+      fi
+    fi
+    if ! grep -qxF "$FROST_UPDATE_HOOK" "$FROST_UNIT"; then
+      awk -v hook="$FROST_UPDATE_HOOK" '
+        /^ExecStart=/ && !done { print hook; done=1 }
+        { print }
+      ' "$FROST_UNIT" > "$FROST_UNIT.tmp"
+      mv "$FROST_UNIT.tmp" "$FROST_UNIT"
+      changed=true
+      log "Migrated $FROST_UNIT update hook"
+    fi
+  fi
+
+  if [ "$changed" = true ]; then
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Release downloads + verification
+# ---------------------------------------------------------------------------
+
+release_url() {
+  echo "$FROST_REPO/releases/download/v$1/$2"
+}
+
+fetch_latest_version() {
+  curl -fsSL "$FROST_REPO/releases/latest" -o /dev/null -w '%{url_effective}' 2>/dev/null |
+    sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true
+}
+
+# verify_sha256 <SHA256SUMS> <file> <name-in-sums>
+verify_sha256() {
+  local sums="$1"
+  local file="$2"
+  local name="$3"
+  local expected
+  local actual
+
+  expected=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1; exit }' "$sums")
+  if [ -z "$expected" ]; then
+    error "No checksum for $name in SHA256SUMS"
+    return 1
+  fi
+  actual=$(sha256sum "$file" | awk '{print $1}')
+  if [ "$expected" != "$actual" ]; then
+    error "Checksum mismatch for $name (expected $expected, got $actual)"
+    return 1
+  fi
+  log "Verified $name (sha256 $actual)"
+}
+
+# fetch_verified <version> <asset> <dest>
+fetch_verified() {
+  local version="$1"
+  local asset="$2"
+  local dest="$3"
+
+  if [ ! -s "$STAGE_DIR/SHA256SUMS" ]; then
+    if ! curl -fsSL "$(release_url "$version" SHA256SUMS)" -o "$STAGE_DIR/SHA256SUMS"; then
+      rm -f "$STAGE_DIR/SHA256SUMS"
+      FAIL_REASON="Release v$version has no SHA256SUMS; refusing unverified update"
+      return 1
+    fi
+  fi
+
+  if ! curl -fsSL "$(release_url "$version" "$asset")" -o "$dest"; then
+    FAIL_REASON="Failed to download $asset for v$version"
+    return 1
+  fi
+
+  if ! verify_sha256 "$STAGE_DIR/SHA256SUMS" "$dest" "$asset"; then
+    FAIL_REASON="Checksum verification failed for $asset (v$version)"
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Bun (pinned)
+# ---------------------------------------------------------------------------
+
+ensure_pinned_bun() {
+  local current=""
+
+  if [ -x "$BUN_INSTALL/bin/bun" ]; then
+    current=$("$BUN_INSTALL/bin/bun" --version 2>/dev/null || true)
+  fi
+
+  if [ "$current" = "$FROST_BUN_VERSION" ]; then
+    log "Bun $current already installed"
+  else
+    log "Installing bun $FROST_BUN_VERSION (current: ${current:-none})..."
+    if ! curl -fsSL https://bun.sh/install 2>/dev/null | bash -s "bun-v$FROST_BUN_VERSION" > /dev/null 2>&1; then
+      if [ -n "$current" ]; then
+        error "Failed to install bun $FROST_BUN_VERSION; continuing with bun $current"
+      else
+        FAIL_REASON="Failed to install bun $FROST_BUN_VERSION"
+        return 1
+      fi
+    fi
+  fi
+
+  if [ -f "$BUN_INSTALL/bin/bun" ]; then
+    mkdir -p /usr/local/bin
+    ln -sf "$BUN_INSTALL/bin/bun" /usr/local/bin/bun
+  else
+    FAIL_REASON="Bun not found at $BUN_INSTALL/bin/bun"
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+health_url() {
+  local host
+  local port
+  host=$(get_env_value "$FROST_DIR/.env" "HOSTNAME")
+  port=$(get_env_value "$FROST_DIR/.env" "PORT")
+  case "$host" in
+    "" | 0.0.0.0 | "::" | "[::]" | localhost | 127.0.0.1) host="127.0.0.1" ;;
+    \[*\]) ;;
+    *:*) host="[$host]" ;;
+  esac
+  echo "http://$host:${port:-3000}/api/health"
+}
+
+# wait_for_healthy <expected-version|""> <timeout-seconds>
+wait_for_healthy() {
+  local expected="$1"
+  local timeout="$2"
+  local url
+  local body
+  local deadline
+  local streak=0
+
+  url=$(health_url)
+  deadline=$((SECONDS + timeout))
+  log "Waiting up to ${timeout}s for $url${expected:+ to report v$expected}..."
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    body=$(curl -fsS --max-time 5 "$url" 2>/dev/null || true)
+    if echo "$body" | grep -q '"ok": *true' &&
+      { [ -z "$expected" ] || echo "$body" | grep -qF "\"version\":\"$expected\""; }; then
+      streak=$((streak + 1))
+      # Require two consecutive healthy responses to catch immediate crash loops
+      if [ "$streak" -ge 2 ]; then
+        success "Frost is healthy: $body"
+        return 0
+      fi
+    else
+      streak=0
+    fi
+    sleep 3
+  done
+
+  error "Health check failed (last response: ${body:-none})"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Rollback
+# ---------------------------------------------------------------------------
+
+restore_tarball_backup() {
+  local item
+  local base
+
+  log "Restoring previous version files..."
+  # Only clear $FROST_DIR once every original item was moved into the backup
+  # and the new tarball started extracting; otherwise originals still live here
+  if [ "$TARBALL_EXTRACTING" = true ]; then
+    for item in "$FROST_DIR"/* "$FROST_DIR"/.[!.]*; do
+      [ -e "$item" ] || continue
+      base=$(basename "$item")
+      case "$base" in
+        data | .backup | .env) continue ;;
+      esac
+      rm -rf "$item"
+    done
+  fi
+  for item in "$BACKUP_DIR/code"/* "$BACKUP_DIR/code"/.[!.]*; do
+    [ -e "$item" ] || continue
+    mv "$item" "$FROST_DIR/"
+  done
+  if [ -f "$BACKUP_DIR/.env" ]; then
+    cp -p "$BACKUP_DIR/.env" "$FROST_DIR/.env"
+  fi
+}
+
+restore_git_backup() {
+  local prev_commit
+  local prev_branch
+
+  prev_commit=$(cat "$BACKUP_DIR/commit" 2>/dev/null || true)
+  prev_branch=$(cat "$BACKUP_DIR/branch" 2>/dev/null || true)
+  if [ -z "$prev_commit" ]; then
+    return 0
+  fi
+
+  cd "$FROST_DIR"
+  log "Restoring previous commit $prev_commit..."
+  if [ -n "$prev_branch" ]; then
+    git checkout -f "$prev_branch" 2>/dev/null || true
+    git reset --hard "$prev_commit" 2>/dev/null || true
+  else
+    git checkout -f --detach "$prev_commit" 2>/dev/null || true
+  fi
+  if ! rebuild_restored_git_version; then
+    error "Failed to rebuild previous version after rollback"
+  fi
+}
+
 rebuild_restored_git_version() {
   log "Restoring dependencies for previous version..."
   bun install --frozen-lockfile 2>&1 || return 1
@@ -366,48 +639,90 @@ rebuild_restored_git_version() {
   NEXT_TELEMETRY_DISABLED=1 bun run build 2>&1 || return 1
 }
 
-cleanup_on_failure() {
-  error "Update failed!"
-  echo "failed" > "$UPDATE_RESULT"
-  restore_sqlite_db_backup || true
+# rollback <reason>: restore code + DB if they were touched, write a failed
+# result, and bring the previous version back up.
+rollback() {
+  local reason="$1"
+  IN_ROLLBACK=true
+  set +e
 
-  if [ -f "$BACKUP_DIR/commit" ]; then
-    log "Restoring previous commit..."
-    PREV_COMMIT=$(cat "$BACKUP_DIR/commit")
-    cd "$FROST_DIR"
-    git reset --hard "$PREV_COMMIT" 2>/dev/null || true
-    if ! rebuild_restored_git_version; then
-      error "Failed to rebuild previous version after rollback"
+  error "Update failed: $reason"
+
+  if [ "$FROST_STOPPED" = true ]; then
+    log "Stopping Frost..."
+    systemctl stop frost 2>/dev/null
+  fi
+
+  if [ "$DB_BACKED_UP" = true ]; then
+    restore_sqlite_db_backup
+  fi
+
+  if [ "$CODE_BACKED_UP" = true ]; then
+    if [ "$GIT_MODE" = true ]; then
+      restore_git_backup
+    else
+      restore_tarball_backup
     fi
-    rm -rf "$BACKUP_DIR"
-  elif [ -d "$BACKUP_DIR" ]; then
-    log "Restoring previous version..."
-    RESTORE_DIR="/tmp/frost-app-restore"
-    rm -rf "$RESTORE_DIR"
-    mv "$BACKUP_DIR" "$RESTORE_DIR"
-    rm -rf /tmp/frost-data-restore /tmp/frost-env-restore
-    mv "$FROST_DIR/data" /tmp/frost-data-restore 2>/dev/null || true
-    mv "$FROST_DIR/.env" /tmp/frost-env-restore 2>/dev/null || true
-    rm -rf "$FROST_DIR"
-    mkdir -p "$FROST_DIR"
-    cp -a "$RESTORE_DIR"/. "$FROST_DIR"/
-    rm -rf "$RESTORE_DIR"
-    mv /tmp/frost-data-restore "$FROST_DIR/data" 2>/dev/null || true
-    mv /tmp/frost-env-restore "$FROST_DIR/.env" 2>/dev/null || true
+  fi
+  rm -rf "$BACKUP_DIR"
+
+  # The old version reads this file on startup (it only understands "failed"),
+  # and the reason is the last "Update failed:" line in the update log.
+  echo "failed" > "$UPDATE_RESULT"
+
+  if [ "$FROST_STOPPED" = true ]; then
+    log "Starting previous version..."
+    systemctl start frost 2>/dev/null
+    if wait_for_healthy "" "$HEALTH_TIMEOUT_SEC"; then
+      success "Previous version restored"
+    else
+      error "Previous version did not become healthy; check: journalctl -u frost"
+    fi
   fi
 
-  if [ "$PRE_START" = false ]; then
-    log "Attempting to start Frost with previous version..."
-    systemctl start frost 2>/dev/null || true
-  fi
-
-  exit 1
+  error "Update failed: $reason"
 }
 
-trap cleanup_on_failure ERR
+on_exit() {
+  local rc=$?
+  if [ "$IN_ROLLBACK" != true ] && [ "$FINISHED" != true ] && [ "$rc" -ne 0 ] && [ "$ROLLBACK_ON_EXIT" = true ]; then
+    rollback "${FAIL_REASON:-update.sh exited with status $rc}"
+  fi
+  if [ -n "$STAGE_DIR" ] && [ "$KEEP_STAGE" != true ]; then
+    rm -rf "$STAGE_DIR"
+  fi
+  if [ -n "$FROST_UPDATE_SELF" ] && [ "$KEEP_STAGE" != true ]; then
+    rm -f "$FROST_UPDATE_SELF"
+  fi
+}
 
-success "Frost Update Script"
-echo ""
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+MODE="apply"
+case "${1:-}" in
+  --pre-start) MODE="pre-start" ;;
+  --apply | "") MODE="apply" ;;
+  *)
+    echo "Usage: $0 [--apply]"
+    exit 1
+    ;;
+esac
+
+GIT_MODE=false
+FROST_STOPPED=false
+CODE_BACKED_UP=false
+DB_BACKED_UP=false
+TARBALL_EXTRACTING=false
+FINISHED=false
+IN_ROLLBACK=false
+ROLLBACK_ON_EXIT=false
+KEEP_STAGE=false
+FAIL_REASON=""
+STAGE_DIR="${FROST_UPDATE_STAGE:-}"
+
+trap on_exit EXIT
 
 if [ "$EUID" -ne 0 ]; then
   error "Please run as root (sudo)"
@@ -420,15 +735,136 @@ if [ ! -d "$FROST_DIR" ]; then
   exit 1
 fi
 
-> "$UPDATE_LOG"
-exec > >(tee -a "$UPDATE_LOG") 2>&1
-
-if [ -f "$UPDATE_MARKER" ]; then
-  rm "$UPDATE_MARKER"
-  log "Update triggered from UI"
+# Single update at a time (fd 9 is inherited across re-exec)
+if [ -z "${FROST_UPDATE_LOCKED:-}" ]; then
+  exec 9> /run/frost-update.lock
+  if command -v flock > /dev/null 2>&1 && ! flock -w 60 9; then
+    error "Another update is already running"
+    exit 1
+  fi
+  export FROST_UPDATE_LOCKED=1
 fi
 
+if [ -z "${FROST_UPDATE_LOGGING:-}" ]; then
+  : > "$UPDATE_LOG"
+  exec > >(tee -a "$UPDATE_LOG") 2>&1
+  export FROST_UPDATE_LOGGING=1
+fi
+
+# Run from a private copy: the update replaces files under $FROST_DIR
+if [ "$MODE" = "apply" ] && [ -z "${FROST_UPDATE_SELF:-}" ] && [ -f "$0" ]; then
+  FROST_UPDATE_SELF=$(mktemp /tmp/frost-update.XXXXXX)
+  cp "$0" "$FROST_UPDATE_SELF"
+  export FROST_UPDATE_SELF
+  KEEP_STAGE=true
+  exec /bin/bash "$FROST_UPDATE_SELF" "$@"
+fi
+
+if [ -z "$STAGE_DIR" ]; then
+  STAGE_DIR=$(mktemp -d /tmp/frost-update-stage.XXXXXX)
+fi
+
+if [ -z "${FROST_UPDATE_HANDOFF:-}" ]; then
+  success "Frost Update Script"
+  echo ""
+fi
+
+export HOME="${HOME:-/root}"
+export BUN_INSTALL="$HOME/.bun"
+export PATH="/usr/local/bin:$BUN_INSTALL/bin:$PATH"
+
 cd "$FROST_DIR"
+
+# Target version: handoff env > UI marker > latest release
+TARGET_VERSION="${FROST_UPDATE_TARGET:-}"
+UPDATE_REQUESTED="${FROST_UPDATE_REQUESTED:-false}"
+if [ -z "$TARGET_VERSION" ] && [ -f "$UPDATE_MARKER" ]; then
+  TARGET_VERSION=$(tr -d '[:space:]' < "$UPDATE_MARKER")
+  UPDATE_REQUESTED=true
+  log "Update triggered from UI (target: ${TARGET_VERSION:-unknown})"
+fi
+TARGET_VERSION="${TARGET_VERSION#v}"
+
+if [ -d "$FROST_DIR/.git" ]; then
+  git config --global --add safe.directory "$FROST_DIR" 2>/dev/null || true
+  if git rev-parse HEAD > /dev/null 2>&1 ||
+    git rev-parse -q --verify origin/main > /dev/null 2>&1 ||
+    { [ -n "$TARGET_VERSION" ] && git rev-parse -q --verify "refs/tags/v$TARGET_VERSION" > /dev/null 2>&1; }; then
+    GIT_MODE=true
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Legacy ExecStartPre path: old units run `curl …/main/update.sh | bash -s --
+# --pre-start` before frost starts. We cannot health check from there, so we
+# migrate the units, stage the target release's verified update.sh, enqueue
+# frost-update.service, and let the current version start normally.
+# ---------------------------------------------------------------------------
+if [ "$MODE" = "pre-start" ]; then
+  log "Legacy pre-start update hook: migrating to frost-update.service"
+
+  if [ "$GIT_MODE" = false ]; then
+    if [ -z "$TARGET_VERSION" ]; then
+      TARGET_VERSION=$(fetch_latest_version)
+    fi
+    if [ -z "$TARGET_VERSION" ] ||
+      ! fetch_verified "$TARGET_VERSION" update.sh "$STAGE_DIR/update.sh"; then
+      error "Update failed: ${FAIL_REASON:-could not determine latest release}"
+      echo "failed" > "$UPDATE_RESULT"
+      rm -f "$UPDATE_MARKER"
+      exit 0
+    fi
+    install -m 0755 "$STAGE_DIR/update.sh" "$FROST_DIR/update.sh"
+  else
+    log "Git mode: frost-update.service will use the checked-out update.sh"
+  fi
+
+  if [ -n "$TARGET_VERSION" ]; then
+    printf '%s' "$TARGET_VERSION" > "$UPDATE_MARKER"
+  fi
+  migrate_systemd_units
+  systemctl start --no-block frost-update.service
+  log "Update queued; Frost will restart once it is applied"
+  exit 0
+fi
+
+rm -f "$UPDATE_MARKER" "$UPDATE_RESULT"
+CURRENT_VERSION=""
+if [ "$GIT_MODE" = true ]; then
+  CURRENT_VERSION=$(get_package_version apps/app/package.json)
+else
+  CURRENT_VERSION=$(get_package_version package.json)
+fi
+log "Current version: $CURRENT_VERSION"
+
+# From here on any failure writes a failed result and restores what we touched
+ROLLBACK_ON_EXIT=true
+
+# Tarball mode: hand off to the target release's own (verified) update.sh
+if [ "$GIT_MODE" = false ]; then
+  if [ -z "$TARGET_VERSION" ]; then
+    log "Checking for updates..."
+    TARGET_VERSION=$(fetch_latest_version)
+    if [ -z "$TARGET_VERSION" ]; then
+      FAIL_REASON="Failed to fetch latest release"
+      exit 1
+    fi
+  fi
+
+  if [ "$CURRENT_VERSION" != "$TARGET_VERSION" ] && [ -z "${FROST_UPDATE_HANDOFF:-}" ]; then
+    log "Fetching update.sh from release v$TARGET_VERSION..."
+    fetch_verified "$TARGET_VERSION" update.sh "$STAGE_DIR/update.sh"
+    export FROST_UPDATE_HANDOFF=1
+    export FROST_UPDATE_TARGET="$TARGET_VERSION"
+    export FROST_UPDATE_REQUESTED="$UPDATE_REQUESTED"
+    export FROST_UPDATE_STAGE="$STAGE_DIR"
+    KEEP_STAGE=true
+    ROLLBACK_ON_EXIT=false
+    exec /bin/bash "$STAGE_DIR/update.sh" --apply
+  fi
+fi
+
+migrate_systemd_units
 ensure_cleanup_script_executable
 
 # Ensure FROST_DATA_DIR is set (required since v0.8.0 monorepo)
@@ -443,7 +879,6 @@ FROST_BIND_HOST=$(grep '^HOSTNAME=' "$FROST_DIR/.env" 2>/dev/null | tail -1 | cu
 FROST_BIND_HOST=${FROST_BIND_HOST:-127.0.0.1}
 
 # git mode runs `next start`, which ignores HOSTNAME; pass --hostname instead
-FROST_UNIT=/etc/systemd/system/frost.service
 if [ -f "$FROST_UNIT" ] && grep -q '^ExecStart=/usr/local/bin/bun run start$' "$FROST_UNIT"; then
   sed -i "s|^ExecStart=/usr/local/bin/bun run start\$|ExecStart=/usr/local/bin/bun run start --hostname $FROST_BIND_HOST|" "$FROST_UNIT"
   systemctl daemon-reload 2>/dev/null || true
@@ -456,15 +891,7 @@ fi
 
 ensure_zfs_branching_setup
 
-# Ensure bun is in PATH
-export HOME="${HOME:-/root}"
-export BUN_INSTALL="$HOME/.bun"
-export PATH="/usr/local/bin:$BUN_INSTALL/bin:$PATH"
-
-log "Upgrading bun..."
-curl -fsSL https://bun.sh/install 2>/dev/null | bash > /dev/null 2>&1 || true
-
-mkdir -p /usr/local/bin
+ensure_pinned_bun
 
 # Before any Caddy (re)start below, so it resumes the autosaved config
 migrate_caddy_unit
@@ -480,8 +907,11 @@ if ! caddy list-modules 2>/dev/null | grep -q "dns.providers.cloudflare"; then
   ARCH=$(uname -m)
   case $ARCH in
     x86_64) CADDY_ARCH="amd64" ;;
-    aarch64|arm64) CADDY_ARCH="arm64" ;;
-    *) log "Unsupported architecture: $ARCH"; exit 1 ;;
+    aarch64 | arm64) CADDY_ARCH="arm64" ;;
+    *)
+      FAIL_REASON="Unsupported architecture: $ARCH"
+      exit 1
+      ;;
   esac
 
   curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=${CADDY_ARCH}&p=github.com/caddy-dns/cloudflare&version=${CADDY_VERSION}" -o /usr/bin/caddy
@@ -513,77 +943,79 @@ elif command -v jq &> /dev/null; then
   fi
 fi
 
-if [ -f "$BUN_INSTALL/bin/bun" ]; then
-  ln -sf "$BUN_INSTALL/bin/bun" /usr/local/bin/bun
-else
-  error "Bun not found at $BUN_INSTALL/bin/bun"
-  exit 1
-fi
-
-# Detect mode: git-based (dev/CI) or tarball (production)
-# A valid git repo has .git AND a valid HEAD commit
-GIT_MODE=false
-CONVERTED_FROM_TARBALL=false
-if [ -d "$FROST_DIR/.git" ]; then
-  git config --global --add safe.directory "$FROST_DIR" 2>/dev/null || true
-  if git rev-parse HEAD >/dev/null 2>&1; then
-    GIT_MODE=true
-  else
-    # .git exists but no HEAD - transitioning from tarball to git
-    # Check if origin/main exists and do initial checkout
-    if git rev-parse origin/main >/dev/null 2>&1; then
-      log "Converting tarball install to git mode..."
-      git checkout -f origin/main 2>/dev/null || git reset --hard origin/main
-      GIT_MODE=true
-      CONVERTED_FROM_TARBALL=true
-    fi
+finish_up_to_date() {
+  log "Already up to date (v$CURRENT_VERSION)"
+  log "Ensuring cleanup API key..."
+  ensure_cleanup_api_key
+  if [ "$UPDATE_REQUESTED" = true ]; then
+    echo "success:$CURRENT_VERSION" > "$UPDATE_RESULT"
   fi
-fi
+  FINISHED=true
+  systemctl start frost 2>/dev/null || true
+  exit 0
+}
+
+stop_frost() {
+  log "Stopping Frost..."
+  FROST_STOPPED=true
+  systemctl stop frost 2>/dev/null || true
+}
 
 if [ "$GIT_MODE" = true ]; then
-  CURRENT_VERSION=$(cat apps/app/package.json | grep '"version"' | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/')
-else
-  CURRENT_VERSION=$(cat package.json | grep '"version"' | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/')
-fi
-log "Current version: $CURRENT_VERSION"
-
-if [ "$GIT_MODE" = true ]; then
-  # Git mode: pull and rebuild (for dev installs and CI testing)
+  # Git mode: check out the release tag and rebuild (dev installs and CI)
   log "Git mode detected"
 
+  CONVERTED_FROM_TARBALL=false
+  if ! git rev-parse HEAD > /dev/null 2>&1; then
+    CONVERTED_FROM_TARBALL=true
+  fi
+
   log "Checking for updates..."
-  git fetch origin main 2>/dev/null
-  LOCAL=$(git rev-parse HEAD)
-  REMOTE=$(git rev-parse @{u} 2>/dev/null || git rev-parse origin/main)
+  if [ -n "$TARGET_VERSION" ]; then
+    TARGET_REF="v$TARGET_VERSION"
+    FETCH_ARGS=(--force)
+    if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+      FETCH_ARGS+=(--depth 1)
+    fi
+    if ! git fetch "${FETCH_ARGS[@]}" origin "refs/tags/$TARGET_REF:refs/tags/$TARGET_REF" 2>&1; then
+      log "Could not fetch tag $TARGET_REF from origin; using local tag if present"
+    fi
+    if ! git rev-parse -q --verify "refs/tags/$TARGET_REF^{commit}" > /dev/null; then
+      FAIL_REASON="Release tag $TARGET_REF not found"
+      exit 1
+    fi
+  else
+    log "No target version known (no update marker); falling back to origin/main"
+    git fetch origin main 2>&1 || log "git fetch origin main failed; using existing origin/main"
+    TARGET_REF="origin/main"
+  fi
+
+  REMOTE=$(git rev-parse "$TARGET_REF^{commit}")
+  LOCAL=$(git rev-parse HEAD 2>/dev/null || true)
 
   if [ "$LOCAL" = "$REMOTE" ] && [ "$CONVERTED_FROM_TARBALL" = false ]; then
-    log "Already up to date (v$CURRENT_VERSION)"
-    log "Ensuring cleanup API key..."
-    ensure_cleanup_api_key
-    if [ "$PRE_START" = false ]; then
-      systemctl start frost 2>/dev/null || true
-    fi
-    exit 0
+    finish_up_to_date
   fi
 
   if [ "$CONVERTED_FROM_TARBALL" = true ]; then
-    log "Running rebuild for tarball-to-git conversion..."
+    log "Converting tarball install to git mode ($TARGET_REF)..."
   else
-    log "Updates available"
+    log "Updating $LOCAL -> $TARGET_REF ($REMOTE)"
   fi
 
-  if [ "$PRE_START" = false ]; then
-    log "Stopping Frost..."
-    systemctl stop frost 2>/dev/null || true
+  stop_frost
+
+  if [ "$CONVERTED_FROM_TARBALL" = false ]; then
+    log "Backing up current commit..."
+    rm -rf "$BACKUP_DIR"
+    mkdir -p "$BACKUP_DIR"
+    echo "$LOCAL" > "$BACKUP_DIR/commit"
+    git symbolic-ref -q --short HEAD > "$BACKUP_DIR/branch" 2>/dev/null || true
+    CODE_BACKED_UP=true
   fi
 
-  log "Backing up current commit..."
-  rm -rf "$BACKUP_DIR"
-  mkdir -p "$BACKUP_DIR"
-  echo "$LOCAL" > "$BACKUP_DIR/commit"
-
-  log "Pulling updates..."
-  git reset --hard origin/main 2>/dev/null || git reset --hard @{u}
+  log "Checking out $TARGET_REF..."
+  git checkout -f --detach "$REMOTE"
   ensure_cleanup_script_executable
 
   if [ "$CONVERTED_FROM_TARBALL" = true ]; then
@@ -592,11 +1024,11 @@ if [ "$GIT_MODE" = true ]; then
     log "Creating .env symlink for monorepo..."
     ln -sf "$FROST_DIR/.env" "$FROST_DIR/apps/app/.env"
     log "Updating systemd service for git mode..."
-    sed -i "s|ExecStart=.*|ExecStart=/usr/local/bin/bun run start --hostname ${FROST_BIND_HOST:-127.0.0.1}|" /etc/systemd/system/frost.service
-    if grep -q '^TimeoutStartSec=' /etc/systemd/system/frost.service; then
-      sed -i 's|^TimeoutStartSec=.*|TimeoutStartSec=900|' /etc/systemd/system/frost.service
+    sed -i "s|^ExecStart=.*|ExecStart=/usr/local/bin/bun run start --hostname ${FROST_BIND_HOST:-127.0.0.1}|" "$FROST_UNIT"
+    if grep -q '^TimeoutStartSec=' "$FROST_UNIT"; then
+      sed -i 's|^TimeoutStartSec=.*|TimeoutStartSec=900|' "$FROST_UNIT"
     else
-      sed -i '/\[Service\]/a TimeoutStartSec=900' /etc/systemd/system/frost.service
+      sed -i '/\[Service\]/a TimeoutStartSec=900' "$FROST_UNIT"
     fi
     systemctl daemon-reload
   fi
@@ -616,111 +1048,76 @@ if [ "$GIT_MODE" = true ]; then
     sleep 2
   done
   if [ "$BUILD_OK" = false ]; then
-    error "Build failed after 3 attempts"
-    cleanup_on_failure
-  fi
-
-  log "Backing up SQLite database..."
-  backup_sqlite_db
-
-  log "Running migrations..."
-  bun run migrate 2>&1
-
-  log "Ensuring cleanup API key..."
-  ensure_cleanup_api_key
-
-  NEW_VERSION=$(cat apps/app/package.json | grep '"version"' | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/')
-  rm -rf "$BACKUP_DIR"
-
-  echo "success:$NEW_VERSION" > "$UPDATE_RESULT"
-
-  if [ "$PRE_START" = false ]; then
-    log "Starting Frost..."
-    systemctl start frost
-  fi
-
-  echo ""
-  success "Update complete! v$CURRENT_VERSION → v$NEW_VERSION"
-else
-  # Tarball mode: download prebuilt release
-  log "Checking for updates..."
-  LATEST_VERSION=$(curl -sL "$FROST_REPO/releases/latest" -o /dev/null -w '%{url_effective}' | sed 's|.*/v||')
-  if [ -z "$LATEST_VERSION" ]; then
-    error "Failed to fetch latest release"
+    FAIL_REASON="Build failed after 3 attempts"
     exit 1
   fi
 
-  if [ "v$CURRENT_VERSION" = "v$LATEST_VERSION" ]; then
-    log "Already up to date (v$CURRENT_VERSION)"
-    log "Ensuring cleanup API key..."
-    ensure_cleanup_api_key
-    if [ "$PRE_START" = false ]; then
-      systemctl start frost 2>/dev/null || true
-    fi
-    exit 0
+  NEW_VERSION=$(get_package_version apps/app/package.json)
+else
+  # Tarball mode: download prebuilt release, verify, extract
+  if [ "$CURRENT_VERSION" = "$TARGET_VERSION" ]; then
+    finish_up_to_date
   fi
 
-  log "New version available: v$LATEST_VERSION"
+  log "Updating v$CURRENT_VERSION -> v$TARGET_VERSION"
+  TARBALL_NAME="frost-v${TARGET_VERSION}.tar.gz"
+  log "Downloading $TARBALL_NAME..."
+  fetch_verified "$TARGET_VERSION" "$TARBALL_NAME" "$STAGE_DIR/$TARBALL_NAME"
 
-  if [ "$PRE_START" = false ]; then
-    log "Stopping Frost..."
-    systemctl stop frost 2>/dev/null || true
-  fi
+  stop_frost
 
   log "Backing up current installation..."
   rm -rf "$BACKUP_DIR"
-  mkdir -p "$BACKUP_DIR"
-  for item in "$FROST_DIR"/*; do
+  mkdir -p "$BACKUP_DIR/code"
+  cp -p "$FROST_DIR/.env" "$BACKUP_DIR/.env" 2>/dev/null || true
+  CODE_BACKED_UP=true
+  for item in "$FROST_DIR"/* "$FROST_DIR"/.[!.]*; do
+    [ -e "$item" ] || continue
     base=$(basename "$item")
-    if [ "$base" != "data" ] && [ "$base" != ".backup" ]; then
-      cp -r "$item" "$BACKUP_DIR/"
-    fi
-  done
-  cp "$FROST_DIR/.env" "$BACKUP_DIR/.env" 2>/dev/null || true
-
-  log "Downloading Frost v$LATEST_VERSION..."
-  TARBALL_URL="$FROST_REPO/releases/download/v$LATEST_VERSION/frost-v${LATEST_VERSION}.tar.gz"
-  curl -fsSL "$TARBALL_URL" -o /tmp/frost-update.tar.gz
-
-  for item in "$FROST_DIR"/*; do
-    base=$(basename "$item")
-    if [ "$base" != "data" ] && [ "$base" != ".backup" ]; then
-      rm -rf "$item"
-    fi
+    case "$base" in
+      data | .backup | .env) continue ;;
+    esac
+    mv "$item" "$BACKUP_DIR/code/"
   done
 
-  tar -xzf /tmp/frost-update.tar.gz -C "$FROST_DIR"
-  rm /tmp/frost-update.tar.gz
+  log "Extracting..."
+  TARBALL_EXTRACTING=true
+  tar -xzf "$STAGE_DIR/$TARBALL_NAME" -C "$FROST_DIR"
   ensure_cleanup_script_executable
 
   log "Installing dependencies..."
   bun install --production --frozen-lockfile 2>&1
 
-  log "Backing up SQLite database..."
-  backup_sqlite_db
-
-  log "Running migrations..."
-  bun run migrate 2>&1
-
-  log "Ensuring cleanup API key..."
-  ensure_cleanup_api_key
-
-  rm -rf "$BACKUP_DIR"
-
-  echo "success:$LATEST_VERSION" > "$UPDATE_RESULT"
-
-  if [ "$PRE_START" = false ]; then
-    log "Starting Frost..."
-    systemctl start frost
-  fi
-
-  echo ""
-  success "Update complete! v$CURRENT_VERSION → v$LATEST_VERSION"
+  NEW_VERSION=$(get_package_version package.json)
 fi
+
+log "Backing up SQLite database..."
+backup_sqlite_db
+DB_BACKED_UP=true
+
+log "Running migrations..."
+if ! bun run migrate 2>&1; then
+  FAIL_REASON="Database migration failed"
+  exit 1
+fi
+
+log "Ensuring cleanup API key..."
+ensure_cleanup_api_key
+
+log "Starting Frost v$NEW_VERSION..."
+systemctl start frost
+
+if ! wait_for_healthy "$NEW_VERSION" "$HEALTH_TIMEOUT_SEC"; then
+  journalctl -u frost --no-pager -n 50 2>/dev/null || true
+  rollback "v$NEW_VERSION did not pass health check within ${HEALTH_TIMEOUT_SEC}s"
+  exit 1
+fi
+
+rm -rf "$BACKUP_DIR"
+echo "success:$NEW_VERSION" > "$UPDATE_RESULT"
+FINISHED=true
 
 echo ""
-if [ "$PRE_START" = true ]; then
-  echo "Frost will start automatically"
-else
-  echo "Check status: systemctl status frost"
-fi
+success "Update complete! v$CURRENT_VERSION → v$NEW_VERSION"
+echo ""
+echo "Check status: systemctl status frost"

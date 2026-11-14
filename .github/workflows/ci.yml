@@ -813,6 +813,10 @@ jobs:
           ssh root@${{ steps.server.outputs.ip }} "cat /opt/frost/data/.update-result 2>/dev/null" || echo "(no update result)"
 
           echo ""
+          echo "=== frost-update.service logs ==="
+          ssh root@${{ steps.server.outputs.ip }} "journalctl -u frost-update --no-pager -n 300" || true
+
+          echo ""
           echo "=== System resources ==="
           ssh root@${{ steps.server.outputs.ip }} "free -h; echo '---'; df -h /; echo '---'; uname -a" || true
 

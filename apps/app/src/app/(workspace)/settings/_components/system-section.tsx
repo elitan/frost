@@ -98,7 +98,7 @@ export function SystemSection() {
   function pollForRestart() {
     stopPolling();
     const startTime = Date.now();
-    const maxDuration = 120000;
+    const maxDuration = 300000;
     const expectedPreviousVersion = previousVersionRef.current;
 
     const schedule = () => {
@@ -119,7 +119,7 @@ export function SystemSection() {
 
       if (Date.now() - startTime > maxDuration) {
         setUpdateState("failed");
-        setError("Server did not respond after 2 minutes");
+        setError("Server did not respond after 5 minutes");
         return;
       }
 
