@@ -100,7 +100,7 @@ bun run e2e:changed:fast
 Useful E2E knobs:
 
 ```bash
-E2E_GROUPS='01-basic,20-setup' bun run e2e:local
+E2E_GROUPS='04-update,20-setup' bun run e2e:local
 E2E_GROUP_GLOB='group-2*.sh' bun run e2e:local
 E2E_BATCH_SIZE=4 E2E_START_STAGGER_SEC=1 bun run e2e:local
 ```

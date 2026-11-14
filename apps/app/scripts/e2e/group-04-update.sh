@@ -14,7 +14,7 @@ log "Using environment: $ENV_ID"
 log "Created project: $PROJECT_ID"
 
 SERVICE=$(api -X POST "$BASE_URL/api/environments/$ENV_ID/services" \
-  -d '{"name":"updatetest","deployType":"image","imageUrl":"nginx:alpine","containerPort":80}')
+  -d '{"name":"updatetest","deployType":"image","imageUrl":"nginx:alpine","containerPort":80,"drainTimeout":0,"shutdownTimeout":1}')
 SERVICE_ID=$(require_field "$SERVICE" '.id' "create service") || fail "Failed to create service: $SERVICE"
 log "Created service: $SERVICE_ID"
 
@@ -44,9 +44,21 @@ RESPONSE2=$(service_curl "$HOST_PORT2")
 echo "$RESPONSE2" | grep -q "It works" || fail "v2 not responding correctly"
 log "v2 (httpd) deployed"
 
-OLD_DEPLOY=$(api "$BASE_URL/api/deployments/$DEPLOY_ID")
-OLD_STATUS=$(json_get "$OLD_DEPLOY" '.status')
-[ "$OLD_STATUS" != "running" ] && log "Old deployment stopped (status: $OLD_STATUS)"
+log "Waiting for v1 deployment to stop..."
+OLD_CONTAINER_ID=$(json_get "$DEPLOY_DATA" '.containerId // empty')
+OLD_STATUS=""
+for _ in $(seq 1 20); do
+  OLD_STATUS=$(json_get "$(api "$BASE_URL/api/deployments/$DEPLOY_ID")" '.status')
+  [ "$OLD_STATUS" = "stopped" ] && break
+  sleep 1
+done
+[ "$OLD_STATUS" = "stopped" ] || fail "Expected v1 status 'stopped', got '$OLD_STATUS'"
+
+if [ -n "$OLD_CONTAINER_ID" ] && [ "$OLD_CONTAINER_ID" != "null" ]; then
+  OLD_RUNNING=$(remote "docker inspect $OLD_CONTAINER_ID --format '{{.State.Running}}' 2>/dev/null || echo missing" 2>&1 | tr -d '\r\n[:space:]')
+  [ -z "$OLD_RUNNING" ] || [ "$OLD_RUNNING" = "false" ] || [ "$OLD_RUNNING" = "missing" ] || fail "v1 container still running: $OLD_RUNNING"
+fi
+log "v1 stopped and its container is gone"
 
 log "Cleanup..."
 api -X DELETE "$BASE_URL/api/projects/$PROJECT_ID" > /dev/null

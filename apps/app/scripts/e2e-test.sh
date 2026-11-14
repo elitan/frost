@@ -10,7 +10,7 @@ GROUP_LIST="${E2E_GROUPS:-}"
 
 if [ -z "$SERVER_IP" ] || [ -z "$API_KEY" ]; then
   echo "Usage: $0 <server-ip> <api-key> [batch-size]"
-  echo "Optional env: E2E_GROUPS='01-basic,04-update' E2E_GROUP_GLOB='group-0*.sh' E2E_START_STAGGER_SEC=1"
+  echo "Optional env: E2E_GROUPS='04-update,10-race' E2E_GROUP_GLOB='group-0*.sh' E2E_START_STAGGER_SEC=1"
   exit 1
 fi
 

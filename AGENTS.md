@@ -49,8 +49,6 @@ bun run e2e:changed                     # auto-select groups based on git change
 bun run e2e:changed:retry               # changed groups + retry failed groups
 bun run e2e:changed:fast                # changed groups + retry + JSON report
 bun run e2e:changed:print               # print selected groups only
-bun run e2e:profile:week1               # baseline harness: full + individual + CI step timings
-bun run e2e:soak:week1                  # stability soak matrix (full + individual + top slow groups)
 ```
 
 Run against an existing local Frost instance (start `bun run dev` first):
@@ -58,24 +56,24 @@ Run against an existing local Frost instance (start `bun run dev` first):
 bun run e2e:local:existing <api-key>          # run all tests
 bun run e2e:local:existing <api-key> 2        # custom batch size
 FROST_PORT=3301 bun run e2e:local:existing <api-key> # custom port
-E2E_GROUPS='01-basic,23-change-password' bun run e2e:local:existing <api-key>  # explicit groups
+E2E_GROUPS='04-update,23-change-password' bun run e2e:local:existing <api-key>  # explicit groups
 E2E_START_STAGGER_SEC=0 bun run e2e:local:existing <api-key> # disable launch delay
 E2E_BATCH_SIZE=4 bun run e2e:local:existing <api-key>        # shared batch-size env knob
 
 # run single test
 SERVER_IP=localhost API_KEY=<key> E2E_LOCAL=1 FROST_DATA_DIR=./apps/app/data \
-  ./apps/app/scripts/e2e/group-01-basic.sh
+  ./apps/app/scripts/e2e/group-04-update.sh
 ```
 
 Run against remote VPS:
 ```bash
 ./apps/app/scripts/e2e-test.sh <ip> <api-key>
-E2E_GROUPS='01-basic,10-race,20-setup' ./apps/app/scripts/e2e-test.sh <ip> <api-key> # explicit groups
+E2E_GROUPS='04-update,10-race,20-setup' ./apps/app/scripts/e2e-test.sh <ip> <api-key> # explicit groups
 E2E_START_STAGGER_SEC=0 ./apps/app/scripts/e2e-test.sh <ip> <api-key>                # max speed
 ```
 
 Script knobs (standardized):
-- `E2E_GROUPS` - comma-separated explicit groups (e.g. `01-basic,20-setup`)
+- `E2E_GROUPS` - comma-separated explicit groups (e.g. `04-update,20-setup`)
 - `E2E_GROUP_GLOB` - shell glob for group files (default: `group-*.sh`)
 - `E2E_START_STAGGER_SEC` - delay between group starts
 - `E2E_BATCH_SIZE` - max concurrent groups (full CI uses 2)
