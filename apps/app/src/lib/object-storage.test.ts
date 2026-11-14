@@ -492,7 +492,7 @@ describe("listObjectStorageBucketObjects", () => {
       expect(garageCalls).toEqual([
         {
           operation: "CreateKey",
-          payload: { name: "frost-list-files", neverExpires: true },
+          payload: { name: "frost-list-files", expiration: expect.any(String) },
         },
         {
           operation: "AllowBucketKey",
@@ -507,6 +507,11 @@ describe("listObjectStorageBucketObjects", () => {
           payload: { id: "temporary-list-key" },
         },
       ]);
+      const expiration = Date.parse(
+        String(garageCalls[0]?.payload?.expiration),
+      );
+      expect(expiration).toBeGreaterThan(Date.now());
+      expect(expiration).toBeLessThanOrEqual(Date.now() + 10 * 60 * 1000);
     } finally {
       resetObjectStorageRuntimeForTests();
       await cleanupObjectStorageFixture(fixture);

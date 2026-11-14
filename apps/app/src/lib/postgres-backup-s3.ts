@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import type { Readable } from "node:stream";
+import { createReadStream, createWriteStream } from "node:fs";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
@@ -157,18 +159,43 @@ export async function getTextFromS3(input: {
   return buffer.toString("utf8");
 }
 
-export async function getBufferFromS3(input: {
+function toNodeReadable(body: unknown): Readable {
+  if (body instanceof Readable) {
+    return body;
+  }
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "transformToWebStream" in body &&
+    typeof body.transformToWebStream === "function"
+  ) {
+    return Readable.fromWeb(body.transformToWebStream() as WebReadableStream);
+  }
+  if (typeof body === "object" && body !== null && "getReader" in body) {
+    return Readable.fromWeb(body as WebReadableStream);
+  }
+  throw new Error("Unsupported S3 response body");
+}
+
+export async function downloadS3ObjectToFile(input: {
   client: S3Client;
   bucket: string;
   key: string;
-}): Promise<Buffer> {
+  filePath: string;
+}): Promise<void> {
   const output = await input.client.send(
     new GetObjectCommand({
       Bucket: input.bucket,
       Key: input.key,
     }),
   );
-  return streamToBuffer(output.Body);
+  if (!output.Body) {
+    throw new Error(`S3 object ${input.key} has no content`);
+  }
+  await pipeline(
+    toNodeReadable(output.Body),
+    createWriteStream(input.filePath),
+  );
 }
 
 export async function listS3Objects(input: {
@@ -211,9 +238,9 @@ export async function deleteS3Objects(input: {
   client: S3Client;
   bucket: string;
   keys: string[];
-}): Promise<void> {
+}): Promise<number> {
   if (input.keys.length === 0) {
-    return;
+    return 0;
   }
 
   const batches: string[][] = [];
@@ -221,8 +248,10 @@ export async function deleteS3Objects(input: {
     batches.push(input.keys.slice(i, i + 1000));
   }
 
+  let deleted = 0;
+  const failures: string[] = [];
   for (const keys of batches) {
-    await input.client.send(
+    const output = await input.client.send(
       new DeleteObjectsCommand({
         Bucket: input.bucket,
         Delete: {
@@ -233,7 +262,25 @@ export async function deleteS3Objects(input: {
         },
       }),
     );
+    const errors = output.Errors ?? [];
+    deleted += keys.length - errors.length;
+    for (const error of errors) {
+      failures.push(
+        `${error.Key ?? "unknown key"}: ${error.Code ?? "Error"}${error.Message ? ` ${error.Message}` : ""}`,
+      );
+    }
   }
+
+  if (failures.length > 0) {
+    const shown = failures.slice(0, 5).join("; ");
+    const more =
+      failures.length > 5 ? ` (and ${failures.length - 5} more)` : "";
+    throw new Error(
+      `Failed to delete ${failures.length} of ${input.keys.length} S3 objects (${deleted} deleted): ${shown}${more}`,
+    );
+  }
+
+  return deleted;
 }
 
 export async function deleteS3Object(input: {

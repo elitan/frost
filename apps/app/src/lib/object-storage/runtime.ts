@@ -5,6 +5,7 @@ import type { Deployments, ObjectStorages, Services } from "../db-types";
 import { deployService } from "../deployer";
 import { addLatestDeploymentWithRuntimeStatus } from "../deployment-runtime";
 import { getServerIp, getSystemDomainForService } from "../domains";
+import { removeGarageRuntimeConfig } from "../garage-runtime";
 import { newRuntimeServiceId } from "../id";
 import { cleanupService } from "../lifecycle";
 import { createService } from "../services";
@@ -383,4 +384,12 @@ export async function cleanupObjectStorageRuntimeService(
 ): Promise<void> {
   await cleanupService(runtimeServiceId);
   await db.deleteFrom("services").where("id", "=", runtimeServiceId).execute();
+  try {
+    removeGarageRuntimeConfig(runtimeServiceId);
+  } catch (error) {
+    console.error(
+      `[object-storage] Failed to remove Garage config for ${runtimeServiceId}:`,
+      error,
+    );
+  }
 }

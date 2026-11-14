@@ -511,6 +511,49 @@ export async function markPostgresBackupRunStarted(
   return updatedCount > 0;
 }
 
+export async function acquirePostgresBackupLock(
+  databaseId: string,
+): Promise<boolean> {
+  const result = await db
+    .updateTable("databaseBackupConfigs")
+    .set({
+      running: true,
+      updatedAt: Date.now(),
+    })
+    .where("databaseId", "=", databaseId)
+    .where("running", "=", false)
+    .executeTakeFirst();
+
+  return Number(result.numUpdatedRows ?? 0) > 0;
+}
+
+export async function releasePostgresBackupLock(
+  databaseId: string,
+): Promise<void> {
+  await db
+    .updateTable("databaseBackupConfigs")
+    .set({
+      running: false,
+      updatedAt: Date.now(),
+    })
+    .where("databaseId", "=", databaseId)
+    .execute();
+}
+
+export async function resetInterruptedPostgresBackupRuns(): Promise<number> {
+  const result = await db
+    .updateTable("databaseBackupConfigs")
+    .set({
+      running: false,
+      lastError: "Interrupted by restart",
+      updatedAt: Date.now(),
+    })
+    .where("running", "=", true)
+    .executeTakeFirst();
+
+  return Number(result.numUpdatedRows ?? 0);
+}
+
 export async function markPostgresBackupRunFinished(input: {
   databaseId: string;
   success: boolean;

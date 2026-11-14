@@ -5,6 +5,8 @@ import {
 } from "./garage-admin";
 import type { ObjectStorageS3Credentials } from "./s3";
 
+const READ_SESSION_KEY_TTL_MS = 10 * 60 * 1000;
+
 interface ObjectBrowserReadSessionInput {
   containerId: string;
   bucketName: string;
@@ -21,7 +23,12 @@ async function cleanupGarageKey(
   accessKeyId: string,
 ): Promise<void> {
   await deleteGarageKey(containerId, accessKeyId).catch(
-    function ignoreCleanupError() {},
+    function logCleanupError(error) {
+      console.error(
+        `[object-storage] Failed to delete temporary read key ${accessKeyId}:`,
+        error,
+      );
+    },
   );
 }
 
@@ -31,6 +38,7 @@ export async function createObjectBrowserReadSession(
   const garageKey = await createGarageKey(
     input.containerId,
     `frost-list-${input.bucketName}`,
+    { expiresAt: new Date(Date.now() + READ_SESSION_KEY_TTL_MS) },
   );
 
   if (!garageKey.secretAccessKey) {

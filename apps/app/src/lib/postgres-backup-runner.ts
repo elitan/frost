@@ -1,8 +1,9 @@
 import { exec, spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import {
   createDatabaseTarget,
@@ -11,15 +12,17 @@ import {
 } from "./database-runtime";
 import { db } from "./db";
 import {
+  acquirePostgresBackupLock,
   getPostgresBackupConfig,
   getPostgresBackupConfigForRun,
   markPostgresBackupRunFinished,
   markPostgresBackupRunStarted,
+  releasePostgresBackupLock,
 } from "./postgres-backup-config";
 import {
   createPostgresBackupS3Client,
   deleteS3Objects,
-  getBufferFromS3,
+  downloadS3ObjectToFile,
   getTextFromS3,
   joinS3Key,
   listS3Objects,
@@ -33,6 +36,9 @@ import { shellEscape } from "./shell-escape";
 const execAsync = promisify(exec);
 const POSTGRES_READY_MAX_ATTEMPTS = 60;
 const POSTGRES_READY_RETRY_DELAY_MS = 1000;
+const SHORT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+const LONG_COMMAND_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+const MAX_STDERR_BYTES = 64 * 1024;
 
 interface ProviderRef {
   containerName: string;
@@ -141,56 +147,136 @@ function parseProviderRef(json: string): ProviderRef {
   };
 }
 
-async function runShellCommand(command: string): Promise<string> {
-  const { stdout, stderr } = await execAsync(command, {
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  const combined = [stdout.trim(), stderr.trim()]
-    .filter(function hasValue(value) {
-      return value.length > 0;
-    })
-    .join("\n");
-  return combined;
+interface ShellCommandOptions {
+  env?: Record<string, string>;
+  timeoutMs?: number;
+}
+
+function getCommandEnv(
+  env: Record<string, string> | undefined,
+): NodeJS.ProcessEnv {
+  return env ? { ...process.env, ...env } : process.env;
+}
+
+function getPostgresEnv(providerRef: ProviderRef): Record<string, string> {
+  return { PGPASSWORD: providerRef.password };
+}
+
+function formatTimeout(ms: number): string {
+  const minutes = Math.round(ms / 60000);
+  return minutes >= 60 ? `${Math.round(minutes / 60)}h` : `${minutes}m`;
+}
+
+function getShellCommandErrorMessage(
+  error: unknown,
+  timeoutMs: number,
+): string {
+  const value = error as {
+    stderr?: unknown;
+    killed?: boolean;
+    signal?: unknown;
+    code?: unknown;
+  };
+  const stderr =
+    typeof value?.stderr === "string"
+      ? value.stderr.trim()
+      : Buffer.isBuffer(value?.stderr)
+        ? value.stderr.toString("utf8").trim()
+        : "";
+  if (stderr.length > 0) {
+    return stderr;
+  }
+  if (value?.killed && value.signal) {
+    return `command timed out after ${formatTimeout(timeoutMs)}`;
+  }
+  if (typeof value?.code === "number") {
+    return `command exited with code ${value.code}`;
+  }
+  return "command failed";
+}
+
+async function runShellCommand(
+  command: string,
+  options: ShellCommandOptions = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? SHORT_COMMAND_TIMEOUT_MS;
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      maxBuffer: 20 * 1024 * 1024,
+      env: getCommandEnv(options.env),
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    });
+    const combined = [stdout.trim(), stderr.trim()]
+      .filter(function hasValue(value) {
+        return value.length > 0;
+      })
+      .join("\n");
+    return combined;
+  } catch (error) {
+    throw new Error(getShellCommandErrorMessage(error, timeoutMs));
+  }
 }
 
 async function runShellCommandToFile(input: {
   command: string;
   filePath: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
 }): Promise<void> {
-  await new Promise<void>(function run(resolve, reject) {
-    const child = spawn("sh", ["-lc", input.command], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const chunks: Buffer[] = [];
-    const fileStream = createWriteStream(input.filePath);
-
-    child.stdout.on("data", function onData(chunk) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      fileStream.write(buffer);
-    });
-
-    child.stderr.on("data", function onErrorData(chunk) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      chunks.push(buffer);
-    });
-
-    child.on("error", function onError(error) {
-      fileStream.end();
-      reject(error);
-    });
-
-    child.on("close", function onClose(code) {
-      if (code === 0) {
-        fileStream.end(function onFinish() {
-          resolve();
-        });
-        return;
-      }
-      fileStream.end();
-      const stderr = Buffer.concat(chunks).toString("utf8").trim();
-      reject(new Error(stderr || "command failed"));
-    });
+  const timeoutMs = input.timeoutMs ?? LONG_COMMAND_TIMEOUT_MS;
+  const child = spawn("sh", ["-lc", input.command], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: getCommandEnv(input.env),
   });
+  const stderrChunks: Buffer[] = [];
+  let stderrBytes = 0;
+  let timedOut = false;
+
+  child.stderr.on("data", function onErrorData(chunk) {
+    if (stderrBytes >= MAX_STDERR_BYTES) {
+      return;
+    }
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    stderrChunks.push(buffer);
+    stderrBytes += buffer.length;
+  });
+
+  const timer = setTimeout(function onTimeout() {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, timeoutMs);
+
+  const exitPromise = new Promise<number | null>(
+    function waitForExit(resolve, reject) {
+      child.once("error", reject);
+      child.once("close", function onClose(code) {
+        resolve(code);
+      });
+    },
+  );
+
+  try {
+    const [, code] = await Promise.all([
+      pipeline(child.stdout, createWriteStream(input.filePath)),
+      exitPromise,
+    ]);
+
+    if (timedOut) {
+      throw new Error(`command timed out after ${formatTimeout(timeoutMs)}`);
+    }
+    if (code !== 0) {
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+      throw new Error(stderr || `command exited with code ${code}`);
+    }
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function waitForPostgresReady(providerRef: ProviderRef): Promise<void> {
@@ -307,13 +393,11 @@ async function enforceRetention(input: {
       return item.key;
     });
 
-  await deleteS3Objects({
+  return deleteS3Objects({
     client: input.client,
     bucket: input.bucket,
     keys: keysToDelete,
   });
-
-  return keysToDelete.length;
 }
 
 export async function runPostgresBackup(
@@ -361,12 +445,13 @@ export async function runPostgresBackup(
 
         globalsFilePath = join(tempDir, "globals.sql");
         const globalsCommand =
-          `docker exec -e PGPASSWORD=${shellEscape(globalsProviderRef.password)} ${shellEscape(globalsProviderRef.containerName)} ` +
+          `docker exec -e PGPASSWORD ${shellEscape(globalsProviderRef.containerName)} ` +
           `pg_dumpall -h 127.0.0.1 -U ${shellEscape(globalsProviderRef.username)} --globals-only`;
 
         await runShellCommandToFile({
           command: globalsCommand,
           filePath: globalsFilePath,
+          env: getPostgresEnv(globalsProviderRef),
         });
         const globalsStat = await stat(globalsFilePath);
         globalsSizeBytes = globalsStat.size;
@@ -392,12 +477,13 @@ export async function runPostgresBackup(
         const manifestKey = joinS3Key(basePrefix, "manifest.json");
         const dumpFilePath = join(tempDir, `${target.id}-dump.pgdump`);
         const dumpCommand =
-          `docker exec -e PGPASSWORD=${shellEscape(providerRef.password)} ${shellEscape(providerRef.containerName)} ` +
+          `docker exec -e PGPASSWORD ${shellEscape(providerRef.containerName)} ` +
           `pg_dump -h 127.0.0.1 -U ${shellEscape(providerRef.username)} -d ${shellEscape(providerRef.database)} -Fc`;
 
         await runShellCommandToFile({
           command: dumpCommand,
           filePath: dumpFilePath,
+          env: getPostgresEnv(providerRef),
         });
         const dumpStat = await stat(dumpFilePath);
 
@@ -656,13 +742,26 @@ async function restoreIntoTarget(input: {
   await waitForPostgresReady(providerRef);
 
   const containerName = providerRef.containerName;
+  const postgresEnv = getPostgresEnv(providerRef);
   const remoteDumpPath = `/tmp/frost-restore-${Date.now()}-${Math.random().toString(16).slice(2)}.pgdump`;
   const remoteGlobalsPath = `/tmp/frost-restore-${Date.now()}-${Math.random().toString(16).slice(2)}.globals.sql`;
 
   try {
     await runShellCommand(
       `docker cp ${shellEscape(input.dumpFilePath)} ${shellEscape(containerName)}:${shellEscape(remoteDumpPath)}`,
+      { timeoutMs: LONG_COMMAND_TIMEOUT_MS },
     );
+
+    try {
+      await runShellCommand(
+        `docker exec ${shellEscape(containerName)} pg_restore --list ${shellEscape(remoteDumpPath)} > /dev/null`,
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "unknown error";
+      throw new Error(
+        `Backup dump is not readable, aborting restore before dropping the database: ${reason}`,
+      );
+    }
 
     if (input.globalsFilePath) {
       await runShellCommand(
@@ -670,32 +769,36 @@ async function restoreIntoTarget(input: {
       );
       try {
         await runShellCommand(
-          `docker exec -e PGPASSWORD=${shellEscape(providerRef.password)} ${shellEscape(containerName)} ` +
+          `docker exec -e PGPASSWORD ${shellEscape(containerName)} ` +
             `psql -X -h 127.0.0.1 -U ${shellEscape(providerRef.username)} -d postgres -f ${shellEscape(remoteGlobalsPath)}`,
+          { env: postgresEnv },
         );
       } catch (error) {
         warnings.push(
           error instanceof Error
-            ? error.message
+            ? `Failed to apply globals restore: ${error.message}`
             : "Failed to apply globals restore",
         );
       }
     }
 
     await runShellCommand(
-      `docker exec -e PGPASSWORD=${shellEscape(providerRef.password)} ${shellEscape(containerName)} ` +
+      `docker exec -e PGPASSWORD ${shellEscape(containerName)} ` +
         `psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U ${shellEscape(providerRef.username)} -d postgres ` +
         `-c ${shellEscape(`DROP DATABASE IF EXISTS ${quoteIdentifier(providerRef.database)};`)}`,
+      { env: postgresEnv },
     );
     await runShellCommand(
-      `docker exec -e PGPASSWORD=${shellEscape(providerRef.password)} ${shellEscape(containerName)} ` +
+      `docker exec -e PGPASSWORD ${shellEscape(containerName)} ` +
         `psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U ${shellEscape(providerRef.username)} -d postgres ` +
         `-c ${shellEscape(`CREATE DATABASE ${quoteIdentifier(providerRef.database)};`)}`,
+      { env: postgresEnv },
     );
     await runShellCommand(
-      `docker exec -e PGPASSWORD=${shellEscape(providerRef.password)} ${shellEscape(containerName)} ` +
+      `docker exec -e PGPASSWORD ${shellEscape(containerName)} ` +
         `pg_restore -h 127.0.0.1 -U ${shellEscape(providerRef.username)} -d ${shellEscape(providerRef.database)} ` +
         `--clean --if-exists --no-owner --no-privileges ${shellEscape(remoteDumpPath)}`,
+      { env: postgresEnv, timeoutMs: LONG_COMMAND_TIMEOUT_MS },
     );
   } finally {
     await runShellCommand(
@@ -729,84 +832,100 @@ export async function restorePostgresBackup(input: {
   const allowOverwrite = input.allowOverwrite === true;
   const startedAt = Date.now();
 
-  const manifestJson = await getTextFromS3({
-    client,
-    bucket: config.s3Bucket,
-    key: input.backupPath,
-  });
-  const manifest = parseBackupManifest(manifestJson);
-  if (manifest.databaseId !== input.databaseId) {
-    throw new Error("Backup does not belong to this database");
+  const lockAcquired = await acquirePostgresBackupLock(input.databaseId);
+  if (!lockAcquired) {
+    throw new Error("A backup or restore is already running");
   }
 
-  const targetBranchName =
-    input.targetBranchName?.trim() || manifest.sourceTargetName;
-  let target = await getTargetByName({
-    databaseId: input.databaseId,
-    targetName: targetBranchName,
-  });
-  let createdBranch = false;
-
-  if (target) {
-    if (!allowOverwrite) {
-      throw new Error("Restore overwrite requires confirmation");
-    }
-  } else {
-    if (!createIfMissing) {
-      throw new Error("Target branch does not exist");
-    }
-    target = (await createDatabaseTarget({
-      databaseId: input.databaseId,
-      name: targetBranchName,
-      sourceTargetName: "main",
-    })) as DatabaseTargetRow;
-    createdBranch = true;
-  }
-
-  const activeTarget = await ensureTargetActive({
-    databaseId: input.databaseId,
-    target,
-  });
-
-  const tempDir = await mkdtemp(join(tmpdir(), "frost-postgres-restore-"));
   try {
-    const dumpContent = await getBufferFromS3({
+    const manifestJson = await getTextFromS3({
       client,
       bucket: config.s3Bucket,
-      key: manifest.dumpKey,
+      key: input.backupPath,
     });
-    const dumpFilePath = join(tempDir, "restore.pgdump");
-    await writeFile(dumpFilePath, dumpContent);
-
-    let globalsFilePath: string | null = null;
-    if (manifest.globalsKey) {
-      const globalsContent = await getTextFromS3({
-        client,
-        bucket: config.s3Bucket,
-        key: manifest.globalsKey,
-      });
-      globalsFilePath = join(tempDir, "restore-globals.sql");
-      await writeFile(globalsFilePath, globalsContent, "utf8");
+    const manifest = parseBackupManifest(manifestJson);
+    if (manifest.databaseId !== input.databaseId) {
+      throw new Error("Backup does not belong to this database");
     }
 
-    const warnings = await restoreIntoTarget({
-      target: activeTarget,
-      dumpFilePath,
-      globalsFilePath,
-    });
-    const finishedAt = Date.now();
-
-    return {
+    const targetBranchName =
+      input.targetBranchName?.trim() || manifest.sourceTargetName;
+    let target = await getTargetByName({
       databaseId: input.databaseId,
-      sourceTargetName: manifest.sourceTargetName,
-      targetBranchName: activeTarget.name,
-      targetId: activeTarget.id,
-      createdBranch,
-      startedAt,
-      finishedAt,
-      warnings,
-    };
+      targetName: targetBranchName,
+    });
+    let createdBranch = false;
+
+    if (target) {
+      if (!allowOverwrite) {
+        throw new Error("Restore overwrite requires confirmation");
+      }
+    } else {
+      if (!createIfMissing) {
+        throw new Error("Target branch does not exist");
+      }
+      target = (await createDatabaseTarget({
+        databaseId: input.databaseId,
+        name: targetBranchName,
+        sourceTargetName: "main",
+      })) as DatabaseTargetRow;
+      createdBranch = true;
+    }
+
+    const activeTarget = await ensureTargetActive({
+      databaseId: input.databaseId,
+      target,
+    });
+
+    const tempDir = await mkdtemp(join(tmpdir(), "frost-postgres-restore-"));
+    try {
+      const dumpFilePath = join(tempDir, "restore.pgdump");
+      await downloadS3ObjectToFile({
+        client,
+        bucket: config.s3Bucket,
+        key: manifest.dumpKey,
+        filePath: dumpFilePath,
+      });
+
+      let globalsFilePath: string | null = null;
+      if (manifest.globalsKey) {
+        globalsFilePath = join(tempDir, "restore-globals.sql");
+        await downloadS3ObjectToFile({
+          client,
+          bucket: config.s3Bucket,
+          key: manifest.globalsKey,
+          filePath: globalsFilePath,
+        });
+      }
+
+      const warnings = await restoreIntoTarget({
+        target: activeTarget,
+        dumpFilePath,
+        globalsFilePath,
+      });
+      const finishedAt = Date.now();
+
+      return {
+        databaseId: input.databaseId,
+        sourceTargetName: manifest.sourceTargetName,
+        targetBranchName: activeTarget.name,
+        targetId: activeTarget.id,
+        createdBranch,
+        startedAt,
+        finishedAt,
+        warnings,
+      };
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await releasePostgresBackupLock(input.databaseId).catch(
+      function onReleaseError(error) {
+        console.error(
+          "[postgres-backup] Failed to release restore lock:",
+          error,
+        );
+      },
+    );
   }
 }

@@ -2,12 +2,14 @@ import {
   getPostgresBackupConfig,
   getScheduleIntervalMs,
   listEnabledPostgresBackupConfigIds,
+  resetInterruptedPostgresBackupRuns,
 } from "./postgres-backup-config";
 import { runPostgresBackup } from "./postgres-backup-runner";
 
 const CHECK_INTERVAL_MS = 60 * 1000;
 
 let intervalId: ReturnType<typeof setInterval> | null = null;
+let startupReset: Promise<void> = Promise.resolve();
 
 export function isPostgresBackupDue(input: {
   lastRunAt: number | null;
@@ -55,8 +57,24 @@ export async function runScheduledPostgresBackups(): Promise<void> {
   }
 }
 
+async function resetInterruptedRuns(): Promise<void> {
+  try {
+    const count = await resetInterruptedPostgresBackupRuns();
+    if (count > 0) {
+      console.log(
+        `[postgres-backup-scheduler] Reset ${count} backup lock(s) left by an interrupted run`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      "[postgres-backup-scheduler] Failed to reset interrupted runs:",
+      error,
+    );
+  }
+}
+
 function checkAndRun(): void {
-  runScheduledPostgresBackups().catch(function onError(error) {
+  startupReset.then(runScheduledPostgresBackups).catch(function onError(error) {
     console.error("[postgres-backup-scheduler] Error:", error);
   });
 }
@@ -65,6 +83,7 @@ export function startPostgresBackupScheduler(): void {
   if (intervalId) {
     return;
   }
+  startupReset = resetInterruptedRuns();
   intervalId = setInterval(checkAndRun, CHECK_INTERVAL_MS);
   console.log("[postgres-backup-scheduler] Started");
 }

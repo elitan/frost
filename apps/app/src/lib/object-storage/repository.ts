@@ -358,21 +358,33 @@ export async function createObjectStorageAccessKey(
   }
 
   const id = newObjectStorageAccessKeyId();
-  await db
-    .insertInto("objectStorageAccessKeys")
-    .values({
-      id,
-      objectStorageId: input.objectStorageId,
-      bucketId: bucket.id,
-      accessKeyId: garageKey.accessKeyId,
-      name: input.name,
-      keyPrefix: getAccessKeyPrefix(garageKey.accessKeyId),
-      permissions: input.permissions,
-      secretAccessKeyEncrypted: encrypt(garageKey.secretAccessKey),
-      createdAt: Date.now(),
-      revokedAt: null,
-    })
-    .execute();
+  try {
+    await db
+      .insertInto("objectStorageAccessKeys")
+      .values({
+        id,
+        objectStorageId: input.objectStorageId,
+        bucketId: bucket.id,
+        accessKeyId: garageKey.accessKeyId,
+        name: input.name,
+        keyPrefix: getAccessKeyPrefix(garageKey.accessKeyId),
+        permissions: input.permissions,
+        secretAccessKeyEncrypted: encrypt(garageKey.secretAccessKey),
+        createdAt: Date.now(),
+        revokedAt: null,
+      })
+      .execute();
+  } catch (error) {
+    await deleteGarageKey(containerId, garageKey.accessKeyId).catch(
+      function logCleanupError(cleanupError) {
+        console.error(
+          `[object-storage] Failed to delete orphaned Garage key ${garageKey.accessKeyId}:`,
+          cleanupError,
+        );
+      },
+    );
+    throw error;
+  }
 
   const accessKey = await db
     .selectFrom("objectStorageAccessKeys")

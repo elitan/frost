@@ -161,11 +161,12 @@ export async function deleteGarageBucket(
 export async function createGarageKey(
   containerId: string,
   name: string,
+  options: { expiresAt?: Date } = {},
 ): Promise<GarageKeyInfo> {
-  const response = await garageJsonApiRunner(containerId, "CreateKey", {
-    name,
-    neverExpires: true,
-  });
+  const payload: Record<string, unknown> = options.expiresAt
+    ? { name, expiration: options.expiresAt.toISOString() }
+    : { name, neverExpires: true };
+  const response = await garageJsonApiRunner(containerId, "CreateKey", payload);
   return parseGarageKeyInfo(response);
 }
 

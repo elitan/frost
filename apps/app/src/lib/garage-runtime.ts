@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FileMount } from "./docker";
 import { GARAGE_REGION } from "./object-storage/config";
@@ -120,13 +120,23 @@ function getGarageConfigOptions(
   };
 }
 
+function getGarageConfigDir(serviceId: string): string {
+  return join(getDataDir(), "garage", serviceId);
+}
+
 function prepareGarageConfigFile(service: GarageRuntimeService): string {
   const options = getGarageConfigOptions(service);
-  const dir = join(getDataDir(), "garage", service.id);
-  mkdirSync(dir, { recursive: true });
+  const dir = getGarageConfigDir(service.id);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
   const configPath = join(dir, "garage.toml");
-  writeFileSync(configPath, buildGarageConfigContent(options));
+  writeFileSync(configPath, buildGarageConfigContent(options), { mode: 0o600 });
+  chmodSync(configPath, 0o600);
   return configPath;
+}
+
+export function removeGarageRuntimeConfig(serviceId: string): void {
+  rmSync(getGarageConfigDir(serviceId), { recursive: true, force: true });
 }
 
 export function prepareGarageRuntime(
