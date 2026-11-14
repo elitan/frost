@@ -97,17 +97,17 @@ timer "Installing dependencies..."
 # Install build tools if not present
 if ! command -v git &> /dev/null || ! command -v unzip &> /dev/null || ! command -v jq &> /dev/null; then
   timer "apt-get update..."
-  apt-get update -qq
+  apt-get -o DPkg::Lock::Timeout=600 update -qq
   timer "apt-get install build tools..."
-  apt-get install -y -qq git unzip build-essential jq > /dev/null
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq git unzip build-essential jq > /dev/null
 else
   timer "Build tools already installed"
 fi
 
 if ! command -v zfs &> /dev/null || ! command -v zpool &> /dev/null; then
   timer "Installing zfsutils-linux..."
-  apt-get update -qq
-  apt-get install -y -qq zfsutils-linux > /dev/null || true
+  apt-get -o DPkg::Lock::Timeout=600 update -qq
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq zfsutils-linux > /dev/null || true
 fi
 
 # Install Docker if not present

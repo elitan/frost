@@ -314,8 +314,8 @@ ensure_zfs_branching_setup() {
 
   if [ -z "$zfs_cmd" ] || [ -z "$zpool_cmd" ]; then
     log "Installing zfsutils-linux..."
-    apt-get update -qq || true
-    apt-get install -y -qq zfsutils-linux > /dev/null || true
+    apt-get -o DPkg::Lock::Timeout=600 update -qq || true
+    apt-get -o DPkg::Lock::Timeout=600 install -y -qq zfsutils-linux > /dev/null || true
     zfs_cmd=$(resolve_command_path "zfs" || true)
     zpool_cmd=$(resolve_command_path "zpool" || true)
   fi
