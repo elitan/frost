@@ -68,7 +68,7 @@ export function GitHubSection() {
   }
 
   function handleConnect() {
-    if (demoMode) return;
+    if (demoMode || !manifestData?.state) return;
     formRef.current?.submit();
   }
 
@@ -165,7 +165,11 @@ export function GitHubSection() {
             </p>
             <form
               ref={formRef}
-              action="https://github.com/settings/apps/new"
+              action={`https://github.com/settings/apps/new${
+                manifestData?.state
+                  ? `?state=${encodeURIComponent(manifestData.state)}`
+                  : ""
+              }`}
               method="POST"
               className="hidden"
             >

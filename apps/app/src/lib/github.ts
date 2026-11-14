@@ -1,7 +1,13 @@
-import { createPrivateKey, createSign } from "node:crypto";
+import {
+  createPrivateKey,
+  createSign,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getSetting, setSetting } from "./auth";
+import { decrypt, encrypt } from "./crypto";
 import { db } from "./db";
 import { newGithubInstallationId } from "./id";
 
@@ -38,16 +44,42 @@ export interface GitHubAppCredentials {
   installationId: string | null;
 }
 
+const ENCRYPTED_SECRET_PREFIX = "enc:v1:";
+
+export function encryptGitHubSecret(value: string): string {
+  if (!value) return value;
+  return `${ENCRYPTED_SECRET_PREFIX}${encrypt(value)}`;
+}
+
+export function decryptGitHubSecret(value: string | null): string | null {
+  if (!value) return value;
+  if (!value.startsWith(ENCRYPTED_SECRET_PREFIX)) {
+    return value;
+  }
+  try {
+    return decrypt(value.slice(ENCRYPTED_SECRET_PREFIX.length));
+  } catch (err) {
+    console.error("Failed to decrypt GitHub App secret:", err);
+    return null;
+  }
+}
+
 export async function getGitHubAppCredentials(): Promise<GitHubAppCredentials | null> {
   const appId = await getSetting("github_app_id");
   if (!appId) return null;
 
   const slug = await getSetting("github_app_slug");
   const name = await getSetting("github_app_name");
-  const privateKey = await getSetting("github_app_private_key");
-  const webhookSecret = await getSetting("github_app_webhook_secret");
+  const privateKey = decryptGitHubSecret(
+    await getSetting("github_app_private_key"),
+  );
+  const webhookSecret = decryptGitHubSecret(
+    await getSetting("github_app_webhook_secret"),
+  );
   const clientId = await getSetting("github_app_client_id");
-  const clientSecret = await getSetting("github_app_client_secret");
+  const clientSecret = decryptGitHubSecret(
+    await getSetting("github_app_client_secret"),
+  );
   const installationId = await getSetting("github_app_installation_id");
 
   if (
@@ -155,10 +187,19 @@ export async function saveGitHubAppCredentials(creds: {
   await setSetting("github_app_id", creds.appId);
   await setSetting("github_app_slug", creds.slug);
   await setSetting("github_app_name", creds.name);
-  await setSetting("github_app_private_key", creds.privateKey);
-  await setSetting("github_app_webhook_secret", creds.webhookSecret);
+  await setSetting(
+    "github_app_private_key",
+    encryptGitHubSecret(creds.privateKey),
+  );
+  await setSetting(
+    "github_app_webhook_secret",
+    encryptGitHubSecret(creds.webhookSecret),
+  );
   await setSetting("github_app_client_id", creds.clientId);
-  await setSetting("github_app_client_secret", creds.clientSecret);
+  await setSetting(
+    "github_app_client_secret",
+    encryptGitHubSecret(creds.clientSecret),
+  );
 }
 
 export async function saveInstallationId(
@@ -301,17 +342,22 @@ export function isGitHubRepo(repoUrl: string): boolean {
   return repoUrl.includes("github.com");
 }
 
+function toCanonicalGitHubUrl(url: string): string {
+  const trimmed = url.trim();
+  const httpsUrl = trimmed.startsWith("git@github.com:")
+    ? trimmed.replace("git@github.com:", "https://github.com/")
+    : trimmed;
+  return httpsUrl.replace(/\/+$/, "").replace(/\.git$/i, "");
+}
+
 export function normalizeGitHubUrl(url: string): string {
-  const httpsUrl = url.startsWith("git@github.com:")
-    ? url.replace("git@github.com:", "https://github.com/")
-    : url;
-  return httpsUrl.replace(/\.git$/, "");
+  return toCanonicalGitHubUrl(url).toLowerCase();
 }
 
 export function parseOwnerRepoFromUrl(
   repoUrl: string,
 ): { owner: string; repo: string } | null {
-  const normalized = normalizeGitHubUrl(repoUrl);
+  const normalized = toCanonicalGitHubUrl(repoUrl);
   const match = normalized.match(/github\.com\/([^/]+)\/([^/]+)/);
   if (!match) return null;
   return { owner: match[1], repo: match[2] };
@@ -368,6 +414,76 @@ export function injectTokenIntoUrl(repoUrl: string, token: string): string {
     return authPrefix + repoUrl.replace("git@github.com:", "");
   }
   return repoUrl;
+}
+
+const MANIFEST_STATE_KEY = "github_manifest_state";
+const MANIFEST_STATE_TTL_MS = 60 * 60 * 1000;
+const MANIFEST_STATE_REUSE_MIN_REMAINING_MS = 15 * 60 * 1000;
+
+interface StoredManifestState {
+  state: string;
+  expiresAt: number;
+}
+
+function parseStoredManifestState(
+  raw: string | null,
+): StoredManifestState | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      typeof parsed?.state === "string" &&
+      parsed.state.length > 0 &&
+      typeof parsed.expiresAt === "number"
+    ) {
+      return { state: parsed.state, expiresAt: parsed.expiresAt };
+    }
+  } catch {}
+  return null;
+}
+
+export function isManifestStateValid(
+  storedRaw: string | null,
+  provided: string | null,
+  now: number = Date.now(),
+): boolean {
+  if (!provided) return false;
+  const stored = parseStoredManifestState(storedRaw);
+  if (!stored || stored.expiresAt <= now) return false;
+  const a = Buffer.from(stored.state);
+  const b = Buffer.from(provided);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+export async function getOrCreateManifestState(): Promise<string> {
+  const now = Date.now();
+  const existing = parseStoredManifestState(
+    await getSetting(MANIFEST_STATE_KEY),
+  );
+  if (
+    existing &&
+    existing.expiresAt - now > MANIFEST_STATE_REUSE_MIN_REMAINING_MS
+  ) {
+    return existing.state;
+  }
+  const state = randomBytes(24).toString("base64url");
+  await setSetting(
+    MANIFEST_STATE_KEY,
+    JSON.stringify({ state, expiresAt: now + MANIFEST_STATE_TTL_MS }),
+  );
+  return state;
+}
+
+export async function consumeManifestState(
+  provided: string | null,
+): Promise<boolean> {
+  const storedRaw = await getSetting(MANIFEST_STATE_KEY);
+  const valid = isManifestStateValid(storedRaw, provided);
+  if (valid) {
+    await setSetting(MANIFEST_STATE_KEY, "");
+  }
+  return valid;
 }
 
 export function buildManifest(domain: string): object {

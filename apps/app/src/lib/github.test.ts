@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  decryptGitHubSecret,
   deriveServiceName,
+  encryptGitHubSecret,
   findDockerfiles,
   findFrostFiles,
   type GitHubTreeEntry,
+  isManifestStateValid,
   normalizeGitHubUrl,
   parseDockerfilePort,
   parseOwnerRepoFromUrl,
@@ -39,6 +42,58 @@ describe("normalizeGitHubUrl", () => {
   });
 });
 
+describe("normalizeGitHubUrl case and trailing slash", () => {
+  test("lowercases and strips trailing slashes", () => {
+    expect(normalizeGitHubUrl("https://github.com/Elitan/Frost/")).toBe(
+      "https://github.com/elitan/frost",
+    );
+    expect(normalizeGitHubUrl("https://github.com/Elitan/Frost.git/")).toBe(
+      "https://github.com/elitan/frost",
+    );
+    expect(normalizeGitHubUrl("git@github.com:Elitan/Frost.GIT")).toBe(
+      "https://github.com/elitan/frost",
+    );
+  });
+});
+
+describe("GitHub secret encryption", () => {
+  test("round-trips encrypted values", () => {
+    const encrypted = encryptGitHubSecret("super-secret");
+    expect(encrypted).not.toContain("super-secret");
+    expect(decryptGitHubSecret(encrypted)).toBe("super-secret");
+  });
+
+  test("returns legacy plaintext values unchanged", () => {
+    const pem =
+      "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----";
+    expect(decryptGitHubSecret(pem)).toBe(pem);
+    expect(decryptGitHubSecret("abc123base64ish==")).toBe("abc123base64ish==");
+    expect(decryptGitHubSecret(null)).toBeNull();
+    expect(decryptGitHubSecret("")).toBe("");
+  });
+
+  test("returns null for corrupt encrypted values", () => {
+    expect(decryptGitHubSecret("enc:v1:bm90LXZhbGlk")).toBeNull();
+  });
+});
+
+describe("isManifestStateValid", () => {
+  const stored = JSON.stringify({ state: "abc", expiresAt: 2000 });
+
+  test("accepts matching unexpired state", () => {
+    expect(isManifestStateValid(stored, "abc", 1000)).toBe(true);
+  });
+
+  test("rejects missing, mismatched, or expired state", () => {
+    expect(isManifestStateValid(stored, null, 1000)).toBe(false);
+    expect(isManifestStateValid(stored, "abd", 1000)).toBe(false);
+    expect(isManifestStateValid(stored, "abc", 3000)).toBe(false);
+    expect(isManifestStateValid(null, "abc", 1000)).toBe(false);
+    expect(isManifestStateValid("", "abc", 1000)).toBe(false);
+    expect(isManifestStateValid("not json", "abc", 1000)).toBe(false);
+  });
+});
+
 describe("parseOwnerRepoFromUrl", () => {
   test("parses HTTPS URL", () => {
     const result = parseOwnerRepoFromUrl("https://github.com/elitan/frost");
@@ -58,6 +113,13 @@ describe("parseOwnerRepoFromUrl", () => {
   test("returns null for invalid URL", () => {
     expect(parseOwnerRepoFromUrl("not-a-github-url")).toBeNull();
     expect(parseOwnerRepoFromUrl("https://gitlab.com/user/repo")).toBeNull();
+  });
+
+  test("preserves owner/repo case", () => {
+    expect(parseOwnerRepoFromUrl("https://github.com/Elitan/Frost/")).toEqual({
+      owner: "Elitan",
+      repo: "Frost",
+    });
   });
 
   test("handles repos with hyphens and numbers", () => {

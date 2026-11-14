@@ -7,15 +7,20 @@ import {
 const COLLECTION_INTERVAL = 15 * 1000; // 15 seconds
 
 let isRunning = false;
+let isCollecting = false;
 let intervalId: ReturnType<typeof setInterval> | null = null;
 
 async function collect(): Promise<void> {
+  if (isCollecting) return;
+  isCollecting = true;
   try {
     const snapshot = await getMonitoringSnapshot();
     await saveMetrics(snapshot);
     await pruneOldMetrics();
   } catch (err) {
     console.error("[metrics-collector] Error collecting metrics:", err);
+  } finally {
+    isCollecting = false;
   }
 }
 

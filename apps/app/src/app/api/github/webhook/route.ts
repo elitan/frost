@@ -12,12 +12,15 @@ import {
   buildPRCommentBody,
   cloneServiceToEnvironment,
   createPreviewEnvironment,
-  deletePreviewEnvironment,
+  deletePreviewEnvironmentsForRepo,
   findMatchingServices,
   findPreviewEnvironment,
   findProductionServicesForRepo,
   getEnvironmentServiceStatuses,
+  groupServicesByProject,
   hasExistingDeployment,
+  isSameRepoPullRequest,
+  previewEnvironmentName,
   type ServiceDeployStatus,
   updateEnvironmentPRCommentId,
   updatePreviewEnvironmentName,
@@ -32,6 +35,7 @@ interface GitHubSender {
 interface PushPayload {
   ref: string;
   after: string;
+  deleted?: boolean;
   repository: {
     default_branch: string;
     clone_url: string;
@@ -51,10 +55,14 @@ interface PullRequestPayload {
     head: {
       ref: string;
       sha: string;
+      repo: {
+        full_name: string;
+      } | null;
     };
   };
   repository: {
     clone_url: string;
+    full_name?: string;
   };
   sender: GitHubSender;
 }
@@ -108,25 +116,30 @@ export async function POST(request: Request) {
 
 async function handlePush(rawBody: string) {
   const payload: PushPayload = JSON.parse(rawBody);
-  const { ref, repository } = payload;
-  const branch = ref.replace("refs/heads/", "");
-  const isDefaultBranch = branch === repository.default_branch;
+  const { ref, after: commitSha, repository, head_commit, sender } = payload;
 
-  if (isDefaultBranch) {
-    return handleProductionPush(payload);
+  if (!ref.startsWith("refs/heads/")) {
+    return NextResponse.json({ message: `Ignored non-branch ref: ${ref}` });
   }
 
-  return handleBranchPush(payload);
-}
+  if (payload.deleted || /^0+$/.test(commitSha)) {
+    return NextResponse.json({ message: "Ignored branch deletion" });
+  }
 
-async function handleProductionPush(payload: PushPayload) {
-  const { after: commitSha, repository, head_commit, sender } = payload;
+  const branch = ref.slice("refs/heads/".length);
 
-  const matchedServices = await findMatchingServices(repository.clone_url);
+  const matchedServices = await findMatchingServices({
+    repoUrl: repository.clone_url,
+    branch,
+    defaultBranch: repository.default_branch,
+  });
 
   if (matchedServices.length === 0) {
     return NextResponse.json({
-      message: "No matching services found",
+      message:
+        branch === repository.default_branch
+          ? "No matching services found"
+          : `No services track branch ${branch}; branch pushes do not create previews, open a PR instead`,
     });
   }
 
@@ -162,25 +175,41 @@ async function handleProductionPush(payload: PushPayload) {
   });
 }
 
-async function handleBranchPush(_payload: PushPayload) {
-  return NextResponse.json({
-    message: "Branch pushes do not create previews, open a PR instead",
-  });
-}
+type ProductionService = Awaited<
+  ReturnType<typeof findProductionServicesForRepo>
+>[number];
 
 async function handlePullRequest(rawBody: string) {
   const payload: PullRequestPayload = JSON.parse(rawBody);
-  const {
-    action,
-    number: prNumber,
-    pull_request,
-    repository,
-    sender,
-  } = payload;
+  const { action, number: prNumber, pull_request, repository } = payload;
 
   if (action !== "opened" && action !== "synchronize" && action !== "closed") {
     return NextResponse.json({
       message: `Ignored pull_request action: ${action}`,
+    });
+  }
+
+  if (action === "closed") {
+    const deleted = await deletePreviewEnvironmentsForRepo(
+      repository.clone_url,
+      prNumber,
+    );
+    return NextResponse.json({
+      message:
+        deleted > 0
+          ? `Deleted preview environment(s) for PR #${prNumber} (${deleted})`
+          : `No preview environment found for PR #${prNumber}`,
+    });
+  }
+
+  if (
+    !isSameRepoPullRequest(
+      pull_request.head.repo?.full_name,
+      repository.full_name,
+    )
+  ) {
+    return NextResponse.json({
+      message: "Ignored pull request from a fork",
     });
   }
 
@@ -194,21 +223,56 @@ async function handlePullRequest(rawBody: string) {
     });
   }
 
-  const projectId = productionServices[0].projectId;
+  const environmentIds: string[] = [];
+  const deploymentIds: string[] = [];
+
+  for (const [projectId, services] of groupServicesByProject(
+    productionServices,
+  )) {
+    try {
+      const result = await deployPreviewForProject(
+        payload,
+        projectId,
+        services,
+      );
+      environmentIds.push(result.environmentId);
+      deploymentIds.push(...result.deploymentIds);
+    } catch (err) {
+      console.error(
+        `Failed to deploy preview for project ${projectId} PR #${prNumber}:`,
+        err,
+      );
+    }
+  }
+
+  return NextResponse.json({
+    message:
+      action === "opened"
+        ? `Created preview environment for PR #${prNumber}`
+        : `Updated preview environment for PR #${prNumber}`,
+    environmentId: environmentIds[0] ?? null,
+    environmentIds,
+    deployments: deploymentIds,
+  });
+}
+
+async function deployPreviewForProject(
+  payload: PullRequestPayload,
+  projectId: string,
+  productionServices: ProductionService[],
+): Promise<{ environmentId: string; deploymentIds: string[] }> {
+  const {
+    action,
+    number: prNumber,
+    pull_request,
+    repository,
+    sender,
+  } = payload;
   const projectHostname =
     productionServices[0].projectHostname ?? slugify(projectId);
   const branch = pull_request.head.ref;
   const prTitle = pull_request.title;
   const commitSha = pull_request.head.sha;
-
-  if (action === "closed") {
-    const deleted = await deletePreviewEnvironment(projectId, prNumber);
-    return NextResponse.json({
-      message: deleted
-        ? `Deleted preview environment for PR #${prNumber}`
-        : `No preview environment found for PR #${prNumber}`,
-    });
-  }
 
   if (action === "synchronize") {
     await updatePreviewEnvironmentName(projectId, prNumber, prTitle);
@@ -220,7 +284,7 @@ async function handlePullRequest(rawBody: string) {
     branch,
     prTitle,
   );
-  const envName = slugify(prTitle).substring(0, 50);
+  const envName = previewEnvironmentName(prNumber, prTitle);
 
   const deploymentIds: string[] = [];
   const serviceStatuses: ServiceDeployStatus[] = [];
@@ -302,12 +366,5 @@ async function handlePullRequest(rawBody: string) {
     console.error("Failed to create/update PR comment:", err);
   }
 
-  return NextResponse.json({
-    message:
-      action === "opened"
-        ? `Created preview environment for PR #${prNumber}`
-        : `Updated preview environment for PR #${prNumber}`,
-    environmentId,
-    deployments: deploymentIds,
-  });
+  return { environmentId, deploymentIds };
 }

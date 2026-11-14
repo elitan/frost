@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { buildPRCommentBody, verifyWebhookSignature } from "./webhook";
+import {
+  buildPRCommentBody,
+  groupServicesByProject,
+  isSameRepoPullRequest,
+  previewEnvironmentName,
+  serviceMatchesPush,
+  verifyWebhookSignature,
+} from "./webhook";
 
 const STATUS_ICON_BASE_URL = "https://frost.build/static/status";
 const SERVICE_DASHBOARD_URL =
@@ -100,5 +107,113 @@ describe("buildPRCommentBody", () => {
       `| frost | ![](${STATUS_ICON_BASE_URL}/ready-dot.svg) Ready | - |`,
     );
     expect(body).not.toContain("[Ready](");
+  });
+});
+
+describe("serviceMatchesPush", () => {
+  const push = {
+    repoUrl: "https://github.com/Elitan/Frost.git",
+    branch: "main",
+    defaultBranch: "main",
+  };
+
+  test("matches same repo and branch, ignoring case and .git", () => {
+    expect(
+      serviceMatchesPush(
+        { repoUrl: "https://github.com/elitan/frost/", branch: "main" },
+        push,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match a different branch", () => {
+    expect(
+      serviceMatchesPush(
+        { repoUrl: "https://github.com/elitan/frost", branch: "staging" },
+        push,
+      ),
+    ).toBe(false);
+  });
+
+  test("matches non-default branch pushes for services on that branch", () => {
+    expect(
+      serviceMatchesPush(
+        { repoUrl: "git@github.com:elitan/frost.git", branch: "staging" },
+        { ...push, branch: "staging" },
+      ),
+    ).toBe(true);
+  });
+
+  test("falls back to default branch when service branch is unset", () => {
+    expect(
+      serviceMatchesPush(
+        { repoUrl: "https://github.com/elitan/frost", branch: null },
+        push,
+      ),
+    ).toBe(true);
+    expect(
+      serviceMatchesPush(
+        { repoUrl: "https://github.com/elitan/frost", branch: null },
+        { ...push, branch: "feature" },
+      ),
+    ).toBe(false);
+  });
+
+  test("does not match a different repo", () => {
+    expect(
+      serviceMatchesPush(
+        { repoUrl: "https://github.com/elitan/other", branch: "main" },
+        push,
+      ),
+    ).toBe(false);
+    expect(serviceMatchesPush({ repoUrl: null, branch: "main" }, push)).toBe(
+      false,
+    );
+  });
+});
+
+describe("previewEnvironmentName", () => {
+  test("prefixes with PR number", () => {
+    expect(previewEnvironmentName(12, "Add login page")).toBe(
+      "pr-12-add-login-page",
+    );
+  });
+
+  test("handles empty slug", () => {
+    expect(previewEnvironmentName(7, "!!!")).toBe("pr-7");
+    expect(previewEnvironmentName(7, "")).toBe("pr-7");
+  });
+
+  test("truncates and keeps PR-number uniqueness", () => {
+    const title = "a very long pull request title ".repeat(5);
+    const a = previewEnvironmentName(1, title);
+    const b = previewEnvironmentName(2, title);
+    expect(a.length).toBeLessThanOrEqual(50);
+    expect(a).not.toBe(b);
+    expect(a.endsWith("-")).toBe(false);
+  });
+});
+
+describe("isSameRepoPullRequest", () => {
+  test("accepts same repo", () => {
+    expect(isSameRepoPullRequest("Elitan/frost", "elitan/frost")).toBe(true);
+  });
+
+  test("rejects forks and missing head repo", () => {
+    expect(isSameRepoPullRequest("attacker/frost", "elitan/frost")).toBe(false);
+    expect(isSameRepoPullRequest(null, "elitan/frost")).toBe(false);
+    expect(isSameRepoPullRequest(undefined, "elitan/frost")).toBe(false);
+  });
+});
+
+describe("groupServicesByProject", () => {
+  test("groups by projectId preserving order", () => {
+    const groups = groupServicesByProject([
+      { id: "a", projectId: "p1" },
+      { id: "b", projectId: "p2" },
+      { id: "c", projectId: "p1" },
+    ]);
+    expect(Array.from(groups.keys())).toEqual(["p1", "p2"]);
+    expect(groups.get("p1")?.map((s) => s.id)).toEqual(["a", "c"]);
   });
 });

@@ -24,21 +24,41 @@ export function verifyWebhookSignature(
   return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-export async function findMatchingServices(webhookRepoUrl: string) {
-  const normalizedWebhookUrl = normalizeGitHubUrl(webhookRepoUrl);
+export function serviceMatchesPush(
+  service: { repoUrl: string | null; branch: string | null },
+  push: { repoUrl: string; branch: string; defaultBranch: string },
+): boolean {
+  if (!service.repoUrl) return false;
+  if (normalizeGitHubUrl(service.repoUrl) !== normalizeGitHubUrl(push.repoUrl))
+    return false;
+  const serviceBranch = service.branch?.trim() || push.defaultBranch;
+  return serviceBranch === push.branch;
+}
 
+export function isSameRepoPullRequest(
+  headRepoFullName: string | null | undefined,
+  baseRepoFullName: string | null | undefined,
+): boolean {
+  if (!headRepoFullName || !baseRepoFullName) return false;
+  return headRepoFullName.toLowerCase() === baseRepoFullName.toLowerCase();
+}
+
+export async function findMatchingServices(push: {
+  repoUrl: string;
+  branch: string;
+  defaultBranch: string;
+}) {
   const services = await db
     .selectFrom("services")
-    .selectAll()
-    .where("deployType", "=", "repo")
-    .where("serviceType", "in", USER_FACING_SERVICE_TYPES)
-    .where("autoDeploy", "=", true)
+    .innerJoin("environments", "environments.id", "services.environmentId")
+    .selectAll("services")
+    .where("services.deployType", "=", "repo")
+    .where("services.serviceType", "in", USER_FACING_SERVICE_TYPES)
+    .where("services.autoDeploy", "=", true)
+    .where("environments.type", "!=", "preview")
     .execute();
 
-  return services.filter((service) => {
-    if (!service.repoUrl) return false;
-    return normalizeGitHubUrl(service.repoUrl) === normalizedWebhookUrl;
-  });
+  return services.filter((service) => serviceMatchesPush(service, push));
 }
 
 export async function hasExistingDeployment(
@@ -86,6 +106,35 @@ export async function findProductionServicesForRepo(webhookRepoUrl: string) {
   });
 }
 
+export function groupServicesByProject<T extends { projectId: string }>(
+  services: T[],
+): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const service of services) {
+    const group = groups.get(service.projectId);
+    if (group) {
+      group.push(service);
+    } else {
+      groups.set(service.projectId, [service]);
+    }
+  }
+  return groups;
+}
+
+const PREVIEW_ENV_NAME_MAX_LENGTH = 50;
+
+export function previewEnvironmentName(
+  prNumber: number,
+  prTitle: string,
+): string {
+  const prefix = `pr-${prNumber}`;
+  const slug = slugify(prTitle);
+  if (!slug) return prefix;
+  return `${prefix}-${slug}`
+    .substring(0, PREVIEW_ENV_NAME_MAX_LENGTH)
+    .replace(/-+$/, "");
+}
+
 export async function createPreviewEnvironment(
   projectId: string,
   prNumber: number,
@@ -97,6 +146,7 @@ export async function createPreviewEnvironment(
     .select("id")
     .where("projectId", "=", projectId)
     .where("prNumber", "=", prNumber)
+    .where("type", "=", "preview")
     .executeTakeFirst();
 
   if (existing) {
@@ -105,7 +155,7 @@ export async function createPreviewEnvironment(
 
   const id = newEnvironmentId();
   const now = Date.now();
-  const name = slugify(prTitle).substring(0, 50);
+  const name = previewEnvironmentName(prNumber, prTitle);
 
   await db
     .insertInto("environments")
@@ -129,12 +179,13 @@ export async function updatePreviewEnvironmentName(
   prNumber: number,
   prTitle: string,
 ): Promise<void> {
-  const name = slugify(prTitle).substring(0, 50);
+  const name = previewEnvironmentName(prNumber, prTitle);
   await db
     .updateTable("environments")
     .set({ name })
     .where("projectId", "=", projectId)
     .where("prNumber", "=", prNumber)
+    .where("type", "=", "preview")
     .execute();
 }
 
@@ -224,23 +275,36 @@ export async function cloneServiceToEnvironment(
   return service.id;
 }
 
-export async function deletePreviewEnvironment(
-  projectId: string,
+export async function deletePreviewEnvironmentsForRepo(
+  webhookRepoUrl: string,
   prNumber: number,
-): Promise<boolean> {
-  const environment = await db
-    .selectFrom("environments")
-    .select(["id", "projectId"])
-    .where("projectId", "=", projectId)
-    .where("prNumber", "=", prNumber)
-    .executeTakeFirst();
+): Promise<number> {
+  const normalizedWebhookUrl = normalizeGitHubUrl(webhookRepoUrl);
 
-  if (!environment) {
-    return false;
+  const rows = await db
+    .selectFrom("environments")
+    .innerJoin("services", "services.environmentId", "environments.id")
+    .select([
+      "environments.id as id",
+      "environments.projectId as projectId",
+      "services.repoUrl as repoUrl",
+    ])
+    .where("environments.type", "=", "preview")
+    .where("environments.prNumber", "=", prNumber)
+    .execute();
+
+  const environments = new Map<string, { id: string; projectId: string }>();
+  for (const row of rows) {
+    if (!row.repoUrl) continue;
+    if (normalizeGitHubUrl(row.repoUrl) !== normalizedWebhookUrl) continue;
+    environments.set(row.id, { id: row.id, projectId: row.projectId });
   }
 
-  await cleanupEnvironment(environment);
-  return true;
+  for (const environment of environments.values()) {
+    await cleanupEnvironment(environment);
+  }
+
+  return environments.size;
 }
 
 export async function findPreviewEnvironment(
@@ -252,6 +316,7 @@ export async function findPreviewEnvironment(
     .selectAll()
     .where("projectId", "=", projectId)
     .where("prNumber", "=", prNumber)
+    .where("type", "=", "preview")
     .executeTakeFirst();
 }
 

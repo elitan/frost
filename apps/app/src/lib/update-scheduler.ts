@@ -16,6 +16,12 @@ async function checkAndRun(): Promise<void> {
 
     if (lastUpdateDate === today) return;
 
+    const lastRun = await getSetting("auto_update_last_run");
+    if (lastRun === today) {
+      lastUpdateDate = today;
+      return;
+    }
+
     const hourStr = await getSetting("auto_update_hour");
     const hour = hourStr ? Number.parseInt(hourStr, 10) : 4;
 

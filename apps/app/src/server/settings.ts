@@ -24,6 +24,7 @@ import {
   clearGitHubAppCredentials,
   getGitHubAppCredentials,
   getInstallations,
+  getOrCreateManifestState,
   saveGitHubAppCredentials,
 } from "@/lib/github";
 import { assertDemoWriteAllowed } from "./demo-guards";
@@ -289,7 +290,8 @@ export const settings = {
       }
 
       const manifest = buildManifest(domain) as Record<string, unknown>;
-      return { manifest, domain };
+      const state = await getOrCreateManifestState();
+      return { manifest, domain, state };
     }),
 
     disconnect: os.settings.github.disconnect.handler(async () => {

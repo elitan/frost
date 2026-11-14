@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSetting } from "@/lib/auth";
 import { getDemoModeBlockedMessage, isDemoMode } from "@/lib/demo-mode";
 import {
+  consumeManifestState,
   exchangeCodeForCredentials,
   saveGitHubAppCredentials,
 } from "@/lib/github";
@@ -24,6 +25,12 @@ export async function GET(request: Request) {
   if (!code) {
     return NextResponse.redirect(
       new URL("/settings/github?error=missing_code", baseUrl),
+    );
+  }
+
+  if (!(await consumeManifestState(url.searchParams.get("state")))) {
+    return NextResponse.redirect(
+      new URL("/settings/github?error=invalid_state", baseUrl),
     );
   }
 
