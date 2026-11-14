@@ -52,8 +52,17 @@ PR_SHA="def456$(date +%s)"
 PR_OPENED_PAYLOAD="{\"action\":\"opened\",\"number\":$PR_NUMBER,\"pull_request\":{\"title\":\"$PR_TITLE\",\"head\":{\"ref\":\"$PR_BRANCH\",\"sha\":\"$PR_SHA\",\"repo\":{\"full_name\":\"elitan/frost\"}}},\"repository\":{\"full_name\":\"elitan/frost\",\"clone_url\":\"https://github.com/elitan/frost.git\"},\"sender\":{\"login\":\"e2e-test\",\"avatar_url\":\"https://example.com/avatar.png\"}}"
 PR_OPENED_RESULT=$(send_webhook "pull_request" "$PR_OPENED_PAYLOAD")
 echo "$PR_OPENED_RESULT" | grep -q "Created preview environment" || fail "PR opened should create preview. Got: $PR_OPENED_RESULT"
-PREVIEW_ENV_ID=$(echo "$PR_OPENED_RESULT" | jq -r '.environmentId')
-[ -z "$PREVIEW_ENV_ID" ] || [ "$PREVIEW_ENV_ID" = "null" ] && fail "No environment ID returned"
+# Other groups run concurrently against the same repo, so the webhook can
+# create previews for several projects; pick the one for this project.
+PREVIEW_ENV_ID=""
+for CANDIDATE_ENV_ID in $(echo "$PR_OPENED_RESULT" | jq -r '(.environmentIds // [.environmentId])[]'); do
+  CANDIDATE_PROJECT_ID=$(api "$BASE_URL/api/environments/$CANDIDATE_ENV_ID" | jq -r '.projectId')
+  if [ "$CANDIDATE_PROJECT_ID" = "$PROJECT_ID" ]; then
+    PREVIEW_ENV_ID="$CANDIDATE_ENV_ID"
+    break
+  fi
+done
+[ -z "$PREVIEW_ENV_ID" ] || [ "$PREVIEW_ENV_ID" = "null" ] && fail "No preview environment for project $PROJECT_ID in: $PR_OPENED_RESULT"
 log "Created preview environment: $PREVIEW_ENV_ID"
 
 log "Verifying environment name is slugified PR title..."
