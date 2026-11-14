@@ -102,8 +102,12 @@ const IN_PROGRESS_DEPLOYMENT_STATUSES: DeploymentStatus[] = [
   "deploying",
 ];
 
+// "running" is allowed: a previous deployment can still be draining (and
+// marked running) right after a newer one went live. Only the service's
+// current deployment is off-limits, checked separately.
 const ROLLBACK_SOURCE_DEPLOYMENT_STATUSES: DeploymentStatus[] = [
   ...IN_PROGRESS_DEPLOYMENT_STATUSES,
+  "running",
   "failed",
   "stopped",
   "cancelled",
@@ -1126,6 +1130,16 @@ async function drainPreviousDeployments(
   );
 
   for (const prev of previousDeployments) {
+    // A previous deployment may have been rolled back to during the drain
+    // wait; its containers are then live again and must not be stopped.
+    const stillRunning = await db
+      .selectFrom("deployments")
+      .select("id")
+      .where("id", "=", prev.id)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+    if (!stillRunning) continue;
+
     const oldReplicas = await db
       .selectFrom("replicas")
       .select("containerId")
@@ -1995,10 +2009,7 @@ export async function rollbackDeployment(
     throw new Error("Cannot rollback services with volumes");
   }
 
-  if (
-    targetDeployment.id === service.currentDeploymentId ||
-    targetDeployment.status === "running"
-  ) {
+  if (targetDeployment.id === service.currentDeploymentId) {
     throw new Error("Deployment is already running");
   }
 
@@ -2028,6 +2039,15 @@ export async function rollbackDeployment(
   }
 
   return withServiceDeploymentLock(service.id, async function rollbackTask() {
+    const current = await db
+      .selectFrom("services")
+      .select("currentDeploymentId")
+      .where("id", "=", service.id)
+      .executeTakeFirst();
+    if (current?.currentDeploymentId === deploymentId) {
+      throw new Error("Deployment is already running");
+    }
+
     const restarted = await transitionDeploymentStatus(
       deploymentId,
       ROLLBACK_SOURCE_DEPLOYMENT_STATUSES,
