@@ -11,8 +11,10 @@ describe("public paths", () => {
     expect(isPublicPath("/api/auth/future-route")).toBe(false);
   });
 
-  test("keeps prefix matching for well-known routes only", () => {
-    expect(isPublicPath("/.well-known/acme-challenge/token")).toBe(true);
+  test("has no public prefix routes", () => {
+    expect(isPublicPath("/.well-known/oauth-authorization-server")).toBe(false);
+    expect(isPublicPath("/api/oauth/token")).toBe(false);
+    expect(isPublicPath("/api/mcp")).toBe(false);
     expect(isPublicPath("/api/docs")).toBe(false);
     expect(isPublicPath("/api/docs/anything")).toBe(false);
   });

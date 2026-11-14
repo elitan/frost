@@ -8,7 +8,6 @@ import {
   Lock,
   RotateCcw,
   Settings,
-  Terminal,
   Zap,
 } from "lucide-react";
 import { IconBox } from "./icon-box";
@@ -48,12 +47,6 @@ const features = [
     icon: Settings,
     title: "Resource Limits",
     description: "Set memory and CPU limits. Keep services in check.",
-  },
-  {
-    icon: Terminal,
-    title: "MCP / AI Agents",
-    description:
-      "Connect any MCP-compatible AI coding agent. Deploy from your editor.",
   },
 ];
 

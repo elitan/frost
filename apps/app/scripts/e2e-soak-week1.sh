@@ -8,7 +8,7 @@ OUT_DIR="${1:-/tmp/frost-e2e-week1/soak-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT_DIR/logs"
 
 FULL_RUN_COUNT="${E2E_SOAK_FULL_RUN_COUNT:-3}"
-TOP_GROUPS="${E2E_SOAK_TOP_GROUPS:-19-templates,16-concurrent,20-setup,26-replicas,27-replica-logs,28-oauth}"
+TOP_GROUPS="${E2E_SOAK_TOP_GROUPS:-19-templates,16-concurrent,20-setup,26-replicas,27-replica-logs}"
 TOP_GROUP_REPEAT="${E2E_SOAK_TOP_GROUP_REPEAT:-3}"
 FULL_BATCH_SIZE="${E2E_SOAK_FULL_BATCH_SIZE:-4}"
 STAGGER_SEC="${E2E_SOAK_STAGGER_SEC:-1}"

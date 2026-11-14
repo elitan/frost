@@ -6,7 +6,6 @@ import {
   verifySessionToken,
 } from "./lib/auth";
 import { isDemoMode } from "./lib/demo-mode";
-import { verifyOAuthToken } from "./lib/oauth";
 import { isPublicPath } from "./lib/public-paths";
 import { isSafeMethod, isSameOriginRequest } from "./lib/request-utils";
 
@@ -48,14 +47,6 @@ async function authorize(
   const apiToken = request.headers.get("x-frost-token");
   if (apiToken && (await verifyApiToken(apiToken))) {
     return NextResponse.next();
-  }
-
-  const authHeader = request.headers.get("authorization");
-  if (authHeader?.startsWith("Bearer ")) {
-    const bearerToken = authHeader.slice(7);
-    if (await verifyOAuthToken(bearerToken)) {
-      return NextResponse.next();
-    }
   }
 
   if (!(await isSetupComplete())) {

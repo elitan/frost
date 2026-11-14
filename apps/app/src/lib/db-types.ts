@@ -217,37 +217,6 @@ export interface Metrics {
   createdAt: Generated<string | null>;
 }
 
-export interface OauthClients {
-  id: string;
-  clientId: string;
-  clientName: string | null;
-  redirectUris: Generated<string>;
-  createdAt: Generated<string>;
-}
-
-export interface OauthCodes {
-  id: string;
-  codeHash: string;
-  clientId: string;
-  codeChallenge: string;
-  codeChallengeMethod: Generated<string>;
-  redirectUri: string;
-  resource: string | null;
-  expiresAt: string;
-  used: Generated<number>;
-  createdAt: Generated<string>;
-}
-
-export interface OauthTokens {
-  id: string;
-  accessTokenHash: string;
-  refreshTokenHash: string | null;
-  clientId: string;
-  scope: string | null;
-  expiresAt: string;
-  createdAt: Generated<string>;
-}
-
 export interface ObjectStorageAccessKeys {
   id: string;
   objectStorageId: string;
@@ -376,9 +345,6 @@ export interface DB {
   environments: Environments;
   githubInstallations: GithubInstallations;
   metrics: Metrics;
-  oauthClients: OauthClients;
-  oauthCodes: OauthCodes;
-  oauthTokens: OauthTokens;
   objectStorageAccessKeys: ObjectStorageAccessKeys;
   objectStorageBuckets: ObjectStorageBuckets;
   objectStorages: ObjectStorages;

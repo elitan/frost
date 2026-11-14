@@ -72,18 +72,6 @@ export function newGithubInstallationId(): string {
   return buildId("ghinst");
 }
 
-export function newOauthClientId(): string {
-  return buildId("oauthc");
-}
-
-export function newOauthCodeId(): string {
-  return buildId("oauthcode");
-}
-
-export function newOauthTokenId(): string {
-  return buildId("oauthtok");
-}
-
 export function newRuntimeServiceId(): string {
   return buildId("rtsvc");
 }

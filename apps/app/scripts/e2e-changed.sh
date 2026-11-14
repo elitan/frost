@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 E2E_DIR="$SCRIPT_DIR/e2e"
-DEFAULT_GROUPS="${E2E_DEFAULT_GROUPS:-01-basic,04-update,10-race,20-setup,28-oauth,29-mcp}"
+DEFAULT_GROUPS="${E2E_DEFAULT_GROUPS:-01-basic,04-update,10-race,20-setup}"
 BATCH_SIZE="${1:-2}"
 BASE_REF="${E2E_BASE_REF:-origin/main}"
 VERBOSE="${E2E_CHANGED_VERBOSE:-1}"
@@ -79,12 +79,6 @@ select_from_file() {
   esac
 
   case "$file" in
-    apps/app/src/app/api/oauth/*|apps/app/src/lib/oauth.ts|apps/app/src/lib/oauth.test.ts|apps/app/src/app/api/mcp/*|apps/app/src/server/mcp-tokens.ts|apps/app/src/contracts/mcp-*.ts|apps/app/scripts/e2e/group-28-oauth.sh|apps/app/scripts/e2e/group-29-mcp.sh)
-      add_groups_csv "28-oauth,29-mcp" "oauth-or-mcp:$file"
-      ;;
-  esac
-
-  case "$file" in
     apps/app/src/app/api/github/*|apps/app/src/lib/webhook.ts|apps/app/src/lib/github.ts|apps/app/src/server/github.ts|apps/app/scripts/e2e/group-06-webhook.sh|apps/app/scripts/e2e/group-22-preview-envs.sh)
       add_groups_csv "06-webhook,22-preview-envs" "github-webhook:$file"
       ;;
@@ -98,7 +92,7 @@ select_from_file() {
 
   case "$file" in
     apps/app/src/app/api/setup/*|apps/app/src/app/api/auth/*|apps/app/src/lib/auth.ts|apps/app/src/proxy.ts|apps/app/scripts/e2e/group-20-setup.sh|apps/app/scripts/e2e/group-23-change-password.sh)
-      add_groups_csv "20-setup,23-change-password,28-oauth,29-mcp" "auth-setup:$file"
+      add_groups_csv "20-setup,23-change-password" "auth-setup:$file"
       ;;
   esac
 }

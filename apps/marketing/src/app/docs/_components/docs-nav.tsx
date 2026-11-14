@@ -39,7 +39,6 @@ const navigation: NavSection[] = [
       { title: "Custom Domains", href: "/docs/guides/custom-domains" },
       { title: "Config File", href: "/docs/guides/config-file" },
       { title: "AI Project Setup", href: "/docs/guides/ai-setup" },
-      { title: "MCP / AI Agents", href: "/docs/guides/mcp" },
     ],
   },
   {

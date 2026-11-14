@@ -23,7 +23,7 @@ Demo: [demo.frost.build](https://demo.frost.build)
 - Zero-downtime deploys and instant rollbacks
 - Health checks, resource limits, persistent volumes
 - Managed object storage with S3-compatible buckets and access keys
-- REST API and MCP support for AI agents
+- REST API
 
 ## Core model
 
@@ -100,7 +100,7 @@ bun run e2e:changed:fast
 Useful E2E knobs:
 
 ```bash
-E2E_GROUPS='01-basic,29-mcp' bun run e2e:local
+E2E_GROUPS='01-basic,20-setup' bun run e2e:local
 E2E_GROUP_GLOB='group-2*.sh' bun run e2e:local
 E2E_BATCH_SIZE=4 E2E_START_STAGGER_SEC=1 bun run e2e:local
 ```

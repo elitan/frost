@@ -70,12 +70,12 @@ SERVER_IP=localhost API_KEY=<key> E2E_LOCAL=1 FROST_DATA_DIR=./apps/app/data \
 Run against remote VPS:
 ```bash
 ./apps/app/scripts/e2e-test.sh <ip> <api-key>
-E2E_GROUPS='01-basic,10-race,29-mcp' ./apps/app/scripts/e2e-test.sh <ip> <api-key> # explicit groups
+E2E_GROUPS='01-basic,10-race,20-setup' ./apps/app/scripts/e2e-test.sh <ip> <api-key> # explicit groups
 E2E_START_STAGGER_SEC=0 ./apps/app/scripts/e2e-test.sh <ip> <api-key>                # max speed
 ```
 
 Script knobs (standardized):
-- `E2E_GROUPS` - comma-separated explicit groups (e.g. `01-basic,28-oauth`)
+- `E2E_GROUPS` - comma-separated explicit groups (e.g. `01-basic,20-setup`)
 - `E2E_GROUP_GLOB` - shell glob for group files (default: `group-*.sh`)
 - `E2E_START_STAGGER_SEC` - delay between group starts
 - `E2E_BATCH_SIZE` - max concurrent groups (full CI uses 2)

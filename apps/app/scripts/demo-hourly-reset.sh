@@ -134,9 +134,6 @@ echo "clearing sensitive tables"
 db_exec "
 DELETE FROM registries;
 DELETE FROM github_installations;
-DELETE FROM oauth_clients;
-DELETE FROM oauth_codes;
-DELETE FROM oauth_tokens;
 DELETE FROM api_keys;
 DELETE FROM metrics;
 DELETE FROM settings

@@ -91,7 +91,6 @@ Reset clears:
 - projects/services/deployments
 - registries
 - github installs
-- oauth clients/codes/tokens
 - api keys
 - metrics
 
@@ -101,8 +100,7 @@ Then reseeds one `demo-hello` project/service.
 - password/setup changes
 - domain/ssl/wildcard changes
 - github app setup + webhooks
-- registry/api key/mcp token changes
-- oauth client/token write actions
+- registry/api key changes
 - update/apply + auto-update changes
 - cleanup settings/manual cleanup
 - rollback deploy
