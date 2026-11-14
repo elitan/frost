@@ -9,6 +9,8 @@ PORT="${FROST_PORT:-3301}"
 BATCH_SIZE="${1:-${E2E_BATCH_SIZE:-2}}"
 DEV_LOG="${E2E_DEV_LOG:-/tmp/frost-dev.log}"
 JWT_SECRET="${FROST_JWT_SECRET:-frost-e2e-$(openssl rand -hex 24)}"
+# Known setup token so the setup e2e groups exercise the token check locally.
+SETUP_TOKEN="${FROST_SETUP_TOKEN:-frost-e2e-setup-token}"
 KEEP_DATA="${E2E_KEEP_DATA:-0}"
 KEEP_REPOS="${E2E_KEEP_REPOS:-0}"
 API_KEY_RETRIES="${E2E_API_KEY_RETRIES:-60}"
@@ -111,6 +113,7 @@ echo "Starting local Frost dev server..."
     NODE_ENV=development \
     FROST_DATA_DIR="$DATA_DIR" \
     FROST_JWT_SECRET="$JWT_SECRET" \
+    FROST_SETUP_TOKEN="$SETUP_TOKEN" \
     bun --bun next dev -p "$PORT"
 ) > "$DEV_LOG" 2>&1 &
 DEV_PID=$!
@@ -183,6 +186,7 @@ echo "Running E2E tests..."
 FROST_PORT="$PORT" \
 FROST_DATA_DIR="$DATA_DIR" \
 ADMIN_PASSWORD="e2eTestPassword123" \
+FROST_SETUP_TOKEN="$SETUP_TOKEN" \
   "$SCRIPT_DIR/e2e-local.sh" "$API_KEY" "$BATCH_SIZE"
 
 if [ "$KEEP_DATA" = "1" ] && [ -d "$DATA_DIR" ]; then

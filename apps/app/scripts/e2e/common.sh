@@ -155,6 +155,20 @@ remote() {
   fi
 }
 
+# Setup token for POST /api/setup. Uses FROST_SETUP_TOKEN when set (local
+# runs), otherwise reads it from the server's .env (written by install.sh).
+# Prints nothing when the instance has no token configured.
+get_setup_token() {
+  if [ -n "${FROST_SETUP_TOKEN:-}" ]; then
+    echo "$FROST_SETUP_TOKEN"
+    return 0
+  fi
+  if [ "${E2E_LOCAL:-}" = "1" ]; then
+    return 0
+  fi
+  remote "grep '^FROST_SETUP_TOKEN=' /opt/frost/.env 2>/dev/null | tail -1 | cut -d= -f2-" 2>/dev/null || true
+}
+
 wait_for_network_http_body() {
   local NETWORK_NAME=$1
   local URL=$2

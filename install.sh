@@ -85,6 +85,10 @@ fi
 # Generate JWT secret
 FROST_JWT_SECRET=$(openssl rand -base64 32)
 
+# One-time token required to complete initial setup (POST /api/setup), so a
+# scanner can't claim a fresh install before the owner does.
+FROST_SETUP_TOKEN=$(openssl rand -hex 16)
+
 echo ""
 timer "Installing dependencies..."
 
@@ -359,6 +363,7 @@ fi
 # Create .env file
 cat > "$FROST_DIR/.env" << EOF
 FROST_JWT_SECRET=$FROST_JWT_SECRET
+FROST_SETUP_TOKEN=$FROST_SETUP_TOKEN
 FROST_DATA_DIR=$FROST_DIR/data
 FROST_POSTGRES_ZFS_POOL=$ZFS_POOL
 FROST_POSTGRES_ZFS_DATASET_BASE=$ZFS_DATASET_BASE
@@ -470,8 +475,12 @@ if [ "$CREATE_API_KEY" = true ]; then
 fi
 
 echo ""
+echo -e "Setup URL: ${YELLOW}https://$SERVER_IP/setup?token=$FROST_SETUP_TOKEN${NC}"
+echo "(one-time setup token; also stored as FROST_SETUP_TOKEN in $FROST_DIR/.env)"
+
+echo ""
 echo "Next steps:"
-echo "  1. Open https://$SERVER_IP to complete setup"
+echo "  1. Open the setup URL above to set your admin password"
 echo "  2. Point your domain to $SERVER_IP"
 echo "  3. Go to Settings in Frost to configure SSL"
 echo ""

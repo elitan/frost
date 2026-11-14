@@ -76,7 +76,7 @@ ssh -o StrictHostKeyChecking=no root@{server_ip} \
   "curl -fsSL https://raw.githubusercontent.com/elitan/frost/main/install.sh | sudo bash"
 ```
 
-Wait for install to complete, then open `http://{server_ip}` in browser to complete setup (set admin password).
+Wait for install to complete. The installer prints a one-time `Setup URL: https://{server_ip}/setup?token=...`; open it in browser to complete setup (set admin password). If you lost it, read the token on the server: `grep FROST_SETUP_TOKEN /opt/frost/.env`.
 
 Verify Frost is running:
 

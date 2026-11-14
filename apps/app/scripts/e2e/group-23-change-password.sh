@@ -18,7 +18,7 @@ if [ "$SETUP_COMPLETE" != "true" ]; then
   log "Setup not complete, creating admin password for isolated run..."
   SETUP_RESULT=$(curl -s -X POST "$BASE_URL/api/setup" \
     -H "Content-Type: application/json" \
-    -d "{\"password\":\"$ADMIN_PASSWORD\"}")
+    -d "$(jq -nc --arg password "$ADMIN_PASSWORD" --arg token "$(get_setup_token)" '{password:$password,token:$token}')")
   SETUP_OK=$(echo "$SETUP_RESULT" | jq -r '.success // empty')
   [ "$SETUP_OK" = "true" ] || fail "Failed to initialize setup: $SETUP_RESULT"
 fi

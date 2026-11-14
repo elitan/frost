@@ -56,10 +56,34 @@ if [ "$SETUP_COMPLETE" != "false" ]; then
 fi
 log "Setup not complete as expected"
 
+SETUP_TOKEN_REQUIRED=$(echo "$SETUP_STATUS" | jq -r '.tokenRequired // false')
+SETUP_TOKEN=$(get_setup_token)
+if [ "$SETUP_TOKEN_REQUIRED" = "true" ]; then
+  [ -n "$SETUP_TOKEN" ] || fail "Setup token required but FROST_SETUP_TOKEN not found"
+  if echo "$SETUP_STATUS" | grep -qF "$SETUP_TOKEN"; then
+    fail "GET /api/setup leaked the setup token"
+  fi
+
+  log "Verifying setup without token is rejected..."
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/setup" \
+    -H "Content-Type: application/json" \
+    -d '{"password":"attackerPassword123"}')
+  [ "$HTTP_CODE" = "403" ] || fail "Expected 403 without setup token, got $HTTP_CODE"
+
+  log "Verifying setup with wrong token is rejected..."
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/setup" \
+    -H "Content-Type: application/json" \
+    -d '{"password":"attackerPassword123","token":"wrong-token"}')
+  [ "$HTTP_CODE" = "403" ] || fail "Expected 403 with wrong setup token, got $HTTP_CODE"
+  log "Setup without valid token correctly rejected"
+else
+  log "No setup token configured on this instance"
+fi
+
 log "Completing setup via POST /api/setup..."
 SETUP_RESULT=$(curl -s -X POST "$BASE_URL/api/setup" \
   -H "Content-Type: application/json" \
-  -d '{"password":"e2eTestPassword123"}')
+  -d "$(jq -nc --arg token "$SETUP_TOKEN" '{password:"e2eTestPassword123",token:$token}')")
 SUCCESS=$(echo "$SETUP_RESULT" | jq -r '.success')
 if [ "$SUCCESS" != "true" ]; then
   fail "Setup failed: $SETUP_RESULT"

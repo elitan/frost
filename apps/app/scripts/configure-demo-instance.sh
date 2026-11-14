@@ -249,7 +249,9 @@ echo "setting demo password"
 setup_resp="$(public_api_request GET "$domain_base_url" "/api/setup")"
 setup_complete="$(echo "$setup_resp" | jq -r '.setupComplete')"
 if [ "$setup_complete" != "true" ]; then
-  public_api_request POST "$domain_base_url" "/api/setup" "$(jq -nc --arg password "$DEMO_PASSWORD" '{password:$password}')" > /dev/null
+  # api_request sends the install API key, which authorizes setup in place of
+  # the one-time setup token.
+  api_request POST "$domain_base_url" "/api/setup" "$(jq -nc --arg password "$DEMO_PASSWORD" '{password:$password}')" > /dev/null
 fi
 
 echo "configured_domain=$DEMO_DOMAIN"

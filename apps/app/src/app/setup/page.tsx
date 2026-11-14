@@ -12,14 +12,22 @@ export default function SetupPage() {
   const [checking, setChecking] = useState(true);
   const [passwordError, setPasswordError] = useState("");
   const [confirmError, setConfirmError] = useState("");
+  const [tokenError, setTokenError] = useState("");
+  const [tokenRequired, setTokenRequired] = useState(false);
+  const [urlToken, setUrlToken] = useState("");
 
   useEffect(() => {
+    // install.sh prints https://IP/setup?token=... ; read it from the URL.
+    setUrlToken(
+      new URLSearchParams(window.location.search).get("token")?.trim() ?? "",
+    );
     fetch("/api/setup")
       .then((res) => res.json())
       .then((data) => {
         if (data.setupComplete) {
           window.location.href = "/";
         } else {
+          setTokenRequired(Boolean(data.tokenRequired));
           setChecking(false);
         }
       })
@@ -30,10 +38,17 @@ export default function SetupPage() {
     e.preventDefault();
     setPasswordError("");
     setConfirmError("");
+    setTokenError("");
 
     const formData = new FormData(e.currentTarget);
     const password = formData.get("password") as string;
     const confirmPassword = formData.get("confirmPassword") as string;
+    const token = ((formData.get("token") as string | null) ?? urlToken).trim();
+
+    if (tokenRequired && !token) {
+      setTokenError("Setup token is required");
+      return;
+    }
 
     if (password.length < 12) {
       setPasswordError("Password must be at least 12 characters");
@@ -50,12 +65,19 @@ export default function SetupPage() {
     const res = await fetch("/api/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, token: token || undefined }),
     }).catch(() => null);
 
     if (!res?.ok) {
       const data = await res?.json().catch(() => ({}));
-      setPasswordError(data?.error || "Setup failed");
+      if (res?.status === 403) {
+        setTokenError(data?.error || "Invalid setup token");
+        // Show the token field so a mistyped URL token can be corrected.
+        setTokenRequired(true);
+        setUrlToken("");
+      } else {
+        setPasswordError(data?.error || "Setup failed");
+      }
       setLoading(false);
       return;
     }
@@ -85,6 +107,30 @@ export default function SetupPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
+              {tokenRequired && !urlToken && (
+                <div className="grid gap-2">
+                  <Label htmlFor="token" className="text-neutral-300">
+                    Setup Token
+                  </Label>
+                  <Input
+                    id="token"
+                    name="token"
+                    type="text"
+                    required
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="border-neutral-700 bg-neutral-800 font-mono text-neutral-100"
+                  />
+                  <p className="text-xs text-neutral-500">
+                    Printed by the installer, or FROST_SETUP_TOKEN in
+                    /opt/frost/.env
+                  </p>
+                </div>
+              )}
+              {tokenError && (
+                <p className="text-sm text-red-400">{tokenError}</p>
+              )}
+
               <div className="grid gap-2">
                 <Label htmlFor="password" className="text-neutral-300">
                   Password
@@ -94,7 +140,7 @@ export default function SetupPage() {
                   name="password"
                   type="password"
                   required
-                  autoFocus
+                  autoFocus={!tokenRequired || Boolean(urlToken)}
                   minLength={12}
                   className="border-neutral-700 bg-neutral-800 text-neutral-100"
                 />
