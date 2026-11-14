@@ -43,6 +43,7 @@ import {
   newDatabaseTargetId,
   newRuntimeServiceId,
 } from "./id";
+import { withLock } from "./keyed-lock";
 import type {
   BranchStorageBackendName,
   BranchStorageMetadata,
@@ -1118,20 +1119,23 @@ function isScaleToZeroEnabled(
 }
 
 async function wakeTargetForGatewayOnce(targetId: string): Promise<number> {
-  let current = await getTargetById(targetId);
-  if (current.lifecycleStatus !== "active") {
-    current = await startDatabaseTarget({
-      databaseId: current.databaseId,
-      targetId: current.id,
-    });
-  }
-  const currentProviderRef = parseProviderRef(current.providerRefJson);
-  return getTargetRuntimeHostPort(current, currentProviderRef);
+  return withDatabaseTargetLock(targetId, async function wakeLocked() {
+    let current = await getTargetById(targetId);
+    if (current.lifecycleStatus !== "active") {
+      current = await startDatabaseTargetUnlocked({
+        databaseId: current.databaseId,
+        targetId: current.id,
+      });
+    }
+    const currentProviderRef = parseProviderRef(current.providerRefJson);
+    return getTargetRuntimeHostPort(current, currentProviderRef);
+  });
 }
 
 /**
  * Concurrent gateway connections share a single wake so a sleeping target is
- * only started once.
+ * only started once; the wake itself runs under the target lock so it cannot
+ * interleave with stop/reset/delete.
  */
 function wakeTargetForGateway(targetId: string): Promise<number> {
   const pending = targetWakePromises.get(targetId);
@@ -1167,6 +1171,77 @@ async function ensureTargetGateway(targetId: string): Promise<void> {
     onActivity: function onActivity() {
       queueTargetActivityWrite(target.id);
     },
+  });
+}
+
+export function getDatabaseTargetLockKey(targetId: string): string {
+  return `db-target:${targetId}`;
+}
+
+/** Serializes runtime operations on one database target (not reentrant). */
+export function withDatabaseTargetLock<T>(
+  targetId: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  return withLock(getDatabaseTargetLockKey(targetId), task);
+}
+
+export function createDatabaseTarget(
+  input: Parameters<typeof createDatabaseTargetUnlocked>[0],
+): Promise<Selectable<DatabaseTargets>> {
+  return withLock(
+    `db-target-create:${input.databaseId}:${input.name}`,
+    function createLocked() {
+      return createDatabaseTargetUnlocked(input);
+    },
+  );
+}
+
+export function resetDatabaseTarget(
+  input: Parameters<typeof resetDatabaseTargetUnlocked>[0],
+): Promise<Selectable<DatabaseTargets>> {
+  return withDatabaseTargetLock(input.targetId, function resetLocked() {
+    return resetDatabaseTargetUnlocked(input);
+  });
+}
+
+export function startDatabaseTarget(
+  input: Parameters<typeof startDatabaseTargetUnlocked>[0],
+): Promise<Selectable<DatabaseTargets>> {
+  return withDatabaseTargetLock(input.targetId, function startLocked() {
+    return startDatabaseTargetUnlocked(input);
+  });
+}
+
+export function stopDatabaseTarget(
+  input: Parameters<typeof stopDatabaseTargetUnlocked>[0],
+): Promise<Selectable<DatabaseTargets>> {
+  return withDatabaseTargetLock(input.targetId, function stopLocked() {
+    return stopDatabaseTargetUnlocked(input);
+  });
+}
+
+export function deleteDatabaseTarget(
+  input: Parameters<typeof deleteDatabaseTargetUnlocked>[0],
+): Promise<void> {
+  return withDatabaseTargetLock(input.targetId, function deleteLocked() {
+    return deleteDatabaseTargetUnlocked(input);
+  });
+}
+
+export function deployDatabaseTarget(
+  targetId: string,
+): Promise<Selectable<DatabaseTargetDeployments>> {
+  return withDatabaseTargetLock(targetId, function deployLocked() {
+    return deployDatabaseTargetUnlocked(targetId);
+  });
+}
+
+export function patchDatabaseTargetRuntimeSettings(
+  input: Parameters<typeof patchDatabaseTargetRuntimeSettingsUnlocked>[0],
+): Promise<DatabaseTargetRuntimeInfo> {
+  return withDatabaseTargetLock(input.targetId, function patchLocked() {
+    return patchDatabaseTargetRuntimeSettingsUnlocked(input);
   });
 }
 
@@ -1334,7 +1409,7 @@ export async function createDatabase(input: {
   return { database, target };
 }
 
-export async function createDatabaseTarget(input: {
+async function createDatabaseTargetUnlocked(input: {
   databaseId: string;
   name: string;
   sourceTargetName?: string;
@@ -1468,7 +1543,7 @@ export async function createDatabaseTarget(input: {
   return target;
 }
 
-export async function resetDatabaseTarget(input: {
+async function resetDatabaseTargetUnlocked(input: {
   databaseId: string;
   targetId: string;
   sourceTargetName: string;
@@ -1598,7 +1673,7 @@ export async function resetDatabaseTarget(input: {
   return updated;
 }
 
-export async function startDatabaseTarget(input: {
+async function startDatabaseTargetUnlocked(input: {
   databaseId: string;
   targetId: string;
 }): Promise<Selectable<DatabaseTargets>> {
@@ -1686,7 +1761,8 @@ export async function startDatabaseTarget(input: {
   }
 }
 
-export async function stopDatabaseTarget(input: {
+/** Caller must hold the target lock (see withDatabaseTargetLock). */
+export async function stopDatabaseTargetUnlocked(input: {
   databaseId: string;
   targetId: string;
   stoppedReason?: DatabaseTargetStoppedReason | null;
@@ -1713,7 +1789,8 @@ export async function stopDatabaseTarget(input: {
   return getTargetById(target.id);
 }
 
-export async function deleteDatabaseTarget(input: {
+/** Caller must hold the target lock (see withDatabaseTargetLock). */
+export async function deleteDatabaseTargetUnlocked(input: {
   databaseId: string;
   targetId: string;
 }): Promise<void> {
@@ -1883,7 +1960,7 @@ export async function listDatabaseTargetDeployments(targetId: string) {
     .execute();
 }
 
-export async function deployDatabaseTarget(
+async function deployDatabaseTargetUnlocked(
   targetId: string,
 ): Promise<Selectable<DatabaseTargetDeployments>> {
   const target = await getTargetById(targetId);
@@ -2070,7 +2147,7 @@ export async function runPostgresTargetSql(input: {
   }
 }
 
-export async function patchDatabaseTargetRuntimeSettings(input: {
+async function patchDatabaseTargetRuntimeSettingsUnlocked(input: {
   targetId: string;
   name?: string;
   hostname?: string;

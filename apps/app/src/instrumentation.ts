@@ -22,9 +22,8 @@ export async function register() {
     const { persistUpdateResult } = await import("./lib/updater");
     await persistUpdateResult();
 
-    const { reconcileDeploymentStartupState } = await import(
-      "./lib/deployment-runtime"
-    );
+    const { reconcileDeploymentStartupState, startDeploymentReconciler } =
+      await import("./lib/deployment-runtime");
     const deploymentStartupState = await reconcileDeploymentStartupState();
     if (
       deploymentStartupState.failedDeployments > 0 ||
@@ -36,6 +35,8 @@ export async function register() {
     } else {
       console.log("[startup] deployments: no stale deployments or containers");
     }
+    startDeploymentReconciler();
+    console.log("[startup] deployment reconciler: started");
 
     const { recoverInterruptedDatabaseImportJobs } = await import(
       "./lib/postgres-import"

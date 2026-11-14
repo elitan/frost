@@ -2,40 +2,43 @@ import type { Selectable } from "kysely";
 import { db } from "./db";
 import type { Deployments, Services } from "./db-types";
 import {
+  IN_PROGRESS_DEPLOYMENT_STATUSES,
+  transitionDeploymentStatus,
+} from "./deployment-status";
+import {
   getDeployTimeoutError,
   getDeployTimeoutMs,
   hasDeploymentTimedOut,
 } from "./deployment-timeout";
 import {
-  getContainerStatus as getContainerStatusDefault,
   listFrostContainers as listFrostContainersDefault,
+  listManagedContainerStates as listManagedContainerStatesDefault,
   stopContainer as stopContainerDefault,
   stopContainersByLabel as stopContainersByLabelDefault,
 } from "./docker";
 import { getServiceRuntimeState } from "./service-runtime-status";
 
-const IN_PROGRESS_DEPLOYMENT_STATUS_LIST = [
-  "pending",
-  "cloning",
-  "pulling",
-  "building",
-  "deploying",
-] as const;
 const LIVE_CONTAINER_STATUSES = new Set(["running", "restarting", "paused"]);
+const RECONCILE_INTERVAL_MS = 15_000;
 
-let getContainerStatusFn = getContainerStatusDefault;
 let listFrostContainersFn = listFrostContainersDefault;
+let listManagedContainerStatesFn = listManagedContainerStatesDefault;
 let stopContainerFn = stopContainerDefault;
 let stopContainersByLabelFn = stopContainersByLabelDefault;
 
+let reconcilerIntervalId: ReturnType<typeof setInterval> | null = null;
+let reconcilerTickInFlight = false;
+
 export function setDeploymentRuntimeDockerForTests(fns: {
-  getContainerStatus?: typeof getContainerStatusDefault;
   listFrostContainers?: typeof listFrostContainersDefault;
+  listManagedContainerStates?: typeof listManagedContainerStatesDefault;
   stopContainer?: typeof stopContainerDefault;
   stopContainersByLabel?: typeof stopContainersByLabelDefault;
 }): void {
-  if (fns.getContainerStatus) getContainerStatusFn = fns.getContainerStatus;
   if (fns.listFrostContainers) listFrostContainersFn = fns.listFrostContainers;
+  if (fns.listManagedContainerStates) {
+    listManagedContainerStatesFn = fns.listManagedContainerStates;
+  }
   if (fns.stopContainer) stopContainerFn = fns.stopContainer;
   if (fns.stopContainersByLabel) {
     stopContainersByLabelFn = fns.stopContainersByLabel;
@@ -43,44 +46,46 @@ export function setDeploymentRuntimeDockerForTests(fns: {
 }
 
 export function resetDeploymentRuntimeDockerForTests(): void {
-  getContainerStatusFn = getContainerStatusDefault;
   listFrostContainersFn = listFrostContainersDefault;
+  listManagedContainerStatesFn = listManagedContainerStatesDefault;
   stopContainerFn = stopContainerDefault;
   stopContainersByLabelFn = stopContainersByLabelDefault;
 }
 
-function isContainerLive(status: string): boolean {
-  return LIVE_CONTAINER_STATUSES.has(status);
-}
-
-function canReconcileDeployment(
-  deployment: Selectable<Deployments> | null,
-): deployment is Selectable<Deployments> & { containerId: string } {
-  return (
-    deployment !== null &&
-    deployment.status === "running" &&
-    !!deployment.containerId
-  );
-}
-
-function isDeployment(
-  deployment: Selectable<Deployments> | null,
-): deployment is Selectable<Deployments> {
-  return deployment !== null;
-}
-
-function canFailTimedOutDeployment(
-  deployment: Selectable<Deployments> | null,
-): deployment is Selectable<Deployments> {
-  return deployment !== null && isInProgressDeploymentStatus(deployment.status);
-}
-
 function isInProgressDeploymentStatus(
   status: Selectable<Deployments>["status"],
-): status is (typeof IN_PROGRESS_DEPLOYMENT_STATUS_LIST)[number] {
-  return (IN_PROGRESS_DEPLOYMENT_STATUS_LIST as readonly string[]).includes(
+): status is (typeof IN_PROGRESS_DEPLOYMENT_STATUSES)[number] {
+  return (IN_PROGRESS_DEPLOYMENT_STATUSES as readonly string[]).includes(
     status,
   );
+}
+
+/**
+ * Looks up a container state in a `docker ps --no-trunc` snapshot. Stored ids
+ * are normally full ids, but tolerate short ids on either side.
+ */
+export function findContainerState(
+  states: Map<string, string>,
+  containerId: string,
+): string | null {
+  const exact = states.get(containerId);
+  if (exact !== undefined) {
+    return exact;
+  }
+  if (containerId.length < 12) {
+    return null;
+  }
+  for (const [id, state] of states) {
+    if (id.startsWith(containerId) || containerId.startsWith(id)) {
+      return state;
+    }
+  }
+  return null;
+}
+
+/** Missing from the snapshot means the container was removed. */
+export function isContainerStateLive(state: string | null): boolean {
+  return state !== null && LIVE_CONTAINER_STATUSES.has(state);
 }
 
 export async function stopDeploymentContainers(
@@ -117,31 +122,23 @@ export async function stopDeploymentContainers(
   }
 }
 
-async function markDeploymentFailed(
+async function markDeploymentTimedOut(
   deployment: Selectable<Deployments>,
-  errorMessage: string,
-): Promise<Selectable<Deployments>> {
+): Promise<boolean> {
+  const errorMessage = getDeployTimeoutError();
   const finishedAt = Date.now();
 
-  await stopDeploymentContainers(deployment.id);
-
-  await db
-    .updateTable("replicas")
-    .set({ status: "failed" })
-    .where("deploymentId", "=", deployment.id)
-    .execute();
-
-  await db.transaction().execute(async function onTimeout(trx) {
-    await trx
-      .updateTable("deployments")
-      .set({
-        status: "failed",
-        errorMessage,
-        finishedAt,
-        rollbackEligible: false,
-      })
-      .where("id", "=", deployment.id)
-      .execute();
+  const applied = await db.transaction().execute(async function onTimeout(trx) {
+    const transitioned = await transitionDeploymentStatus(
+      deployment.id,
+      IN_PROGRESS_DEPLOYMENT_STATUSES,
+      "failed",
+      { errorMessage, finishedAt, rollbackEligible: false },
+      { executor: trx },
+    );
+    if (!transitioned) {
+      return false;
+    }
 
     await trx
       .updateTable("services")
@@ -154,117 +151,53 @@ async function markDeploymentFailed(
       .deleteFrom("deploymentLocks")
       .where("deploymentId", "=", deployment.id)
       .execute();
+    return true;
   });
 
-  return {
-    ...deployment,
-    status: "failed",
-    errorMessage,
-    finishedAt,
-    rollbackEligible: false,
-  };
-}
-
-async function markDeploymentTimedOut(
-  deployment: Selectable<Deployments>,
-): Promise<Selectable<Deployments>> {
-  return markDeploymentFailed(deployment, getDeployTimeoutError());
-}
-
-async function reconcileTimedOutDeployment(
-  deployment: Selectable<Deployments> | null,
-): Promise<Selectable<Deployments> | null> {
-  if (!canFailTimedOutDeployment(deployment)) {
-    return deployment;
+  if (!applied) {
+    return false;
   }
 
-  if (!hasDeploymentTimedOut(deployment.createdAt)) {
-    return deployment;
-  }
-
-  return markDeploymentTimedOut(deployment);
-}
-
-async function hasLiveReplicaContainer(
-  deploymentId: string,
-): Promise<boolean | null> {
-  const replicas = await db
-    .selectFrom("replicas")
-    .select("containerId")
-    .where("deploymentId", "=", deploymentId)
-    .where("status", "=", "running")
-    .where("containerId", "is not", null)
-    .orderBy("replicaIndex", "asc")
+  await stopDeploymentContainers(deployment.id);
+  await db
+    .updateTable("replicas")
+    .set({ status: "failed" })
+    .where("deploymentId", "=", deployment.id)
     .execute();
-
-  if (replicas.length === 0) {
-    return null;
-  }
-
-  for (const replica of replicas) {
-    if (!replica.containerId) {
-      continue;
-    }
-    const status = await getContainerStatusFn(replica.containerId);
-    if (status === "unknown" || isContainerLive(status)) {
-      return true;
-    }
-  }
-
-  return false;
+  return true;
 }
 
-async function markDeploymentStopped(
-  deployment: Selectable<Deployments> & { containerId: string },
-): Promise<Selectable<Deployments>> {
+async function markDeploymentStopped(deployment: {
+  id: string;
+  serviceId: string;
+  containerId: string;
+  finishedAt: number | null;
+}): Promise<boolean> {
   const finishedAt = deployment.finishedAt ?? Date.now();
 
-  await db
-    .updateTable("deployments")
-    .set({ status: "stopped", finishedAt })
-    .where("id", "=", deployment.id)
-    .execute();
+  return db.transaction().execute(async function onStopped(trx) {
+    const transitioned = await transitionDeploymentStatus(
+      deployment.id,
+      ["running"],
+      "stopped",
+      { finishedAt },
+      { executor: trx, expectedContainerId: deployment.containerId },
+    );
+    if (!transitioned) {
+      return false;
+    }
 
-  await db
-    .updateTable("services")
-    .set({ currentDeploymentId: null })
-    .where("id", "=", deployment.serviceId)
-    .where("currentDeploymentId", "=", deployment.id)
-    .execute();
-
-  return { ...deployment, status: "stopped", finishedAt };
+    await trx
+      .updateTable("services")
+      .set({ currentDeploymentId: null })
+      .where("id", "=", deployment.serviceId)
+      .where("currentDeploymentId", "=", deployment.id)
+      .execute();
+    return true;
+  });
 }
 
-export async function reconcileDeploymentRuntimeStatus(
-  deployment: Selectable<Deployments> | null,
-): Promise<Selectable<Deployments> | null> {
-  const timedOutDeployment = await reconcileTimedOutDeployment(deployment);
-
-  if (!canReconcileDeployment(timedOutDeployment)) {
-    return timedOutDeployment;
-  }
-
-  const liveReplicaContainer = await hasLiveReplicaContainer(
-    timedOutDeployment.id,
-  );
-  if (liveReplicaContainer === true) {
-    return timedOutDeployment;
-  }
-  if (liveReplicaContainer === false) {
-    return markDeploymentStopped(timedOutDeployment);
-  }
-
-  const containerStatus = await getContainerStatusFn(
-    timedOutDeployment.containerId,
-  );
-  if (containerStatus === "unknown" || isContainerLive(containerStatus)) {
-    return timedOutDeployment;
-  }
-
-  return markDeploymentStopped(timedOutDeployment);
-}
-
-export async function getLatestDeploymentWithRuntimeStatus(
+async function getLatestDeployment(
   serviceId: string,
 ): Promise<Selectable<Deployments> | null> {
   const latestDeployment = await db
@@ -275,9 +208,13 @@ export async function getLatestDeploymentWithRuntimeStatus(
     .limit(1)
     .executeTakeFirst();
 
-  return reconcileDeploymentRuntimeStatus(latestDeployment ?? null);
+  return latestDeployment ?? null;
 }
 
+/**
+ * Read-only: derives runtime status from DB state. The background reconciler
+ * keeps deployment rows in sync with docker.
+ */
 export async function addLatestDeploymentWithRuntimeStatus<
   T extends Selectable<Services>,
 >(
@@ -289,9 +226,7 @@ export async function addLatestDeploymentWithRuntimeStatus<
     attentionStatus: "updating" | "last-deploy-failed" | null;
   }
 > {
-  const latestDeployment = await getLatestDeploymentWithRuntimeStatus(
-    service.id,
-  );
+  const latestDeployment = await getLatestDeployment(service.id);
   const currentDeploymentId =
     latestDeployment?.status === "stopped" &&
     service.currentDeploymentId === latestDeployment.id
@@ -327,36 +262,140 @@ export async function addLatestDeploymentsWithRuntimeStatus<
   return Promise.all(services.map(addLatestDeploymentWithRuntimeStatus));
 }
 
-export async function reconcileDeploymentsRuntimeStatus(
-  deployments: Selectable<Deployments>[],
-): Promise<Selectable<Deployments>[]> {
-  const reconciled = await Promise.all(
-    deployments.map((deployment) =>
-      reconcileDeploymentRuntimeStatus(deployment),
-    ),
-  );
-  return reconciled.filter(isDeployment);
-}
-
 export async function failStaleInProgressDeployments(): Promise<number> {
   const cutoff = Date.now() - getDeployTimeoutMs();
   const deployments = await db
     .selectFrom("deployments")
     .selectAll()
-    .where("status", "in", [...IN_PROGRESS_DEPLOYMENT_STATUS_LIST])
+    .where("status", "in", [...IN_PROGRESS_DEPLOYMENT_STATUSES])
     .where("createdAt", "<=", cutoff)
     .execute();
 
   let failedCount = 0;
 
   for (const deployment of deployments) {
-    const reconciled = await reconcileTimedOutDeployment(deployment);
-    if (reconciled?.status === "failed") {
+    if (!hasDeploymentTimedOut(deployment.createdAt)) {
+      continue;
+    }
+    if (await markDeploymentTimedOut(deployment)) {
       failedCount += 1;
     }
   }
 
   return failedCount;
+}
+
+/**
+ * Marks running deployments whose containers are no longer live as stopped,
+ * using a single `docker ps` snapshot. DB rows are read before the snapshot
+ * so a container that existed when its row was read is always in it.
+ */
+export async function reconcileRunningDeployments(): Promise<number> {
+  const deployments = await db
+    .selectFrom("deployments")
+    .select(["id", "serviceId", "containerId", "finishedAt"])
+    .where("status", "=", "running")
+    .where("containerId", "is not", null)
+    .execute();
+
+  if (deployments.length === 0) {
+    return 0;
+  }
+
+  const replicas = await db
+    .selectFrom("replicas")
+    .select(["deploymentId", "containerId"])
+    .where(
+      "deploymentId",
+      "in",
+      deployments.map(function mapId(deployment) {
+        return deployment.id;
+      }),
+    )
+    .where("status", "=", "running")
+    .where("containerId", "is not", null)
+    .execute();
+
+  const states = await listManagedContainerStatesFn();
+  if (!states) {
+    return 0;
+  }
+
+  const replicaContainerIds = new Map<string, string[]>();
+  for (const replica of replicas) {
+    if (!replica.containerId) continue;
+    const ids = replicaContainerIds.get(replica.deploymentId) ?? [];
+    ids.push(replica.containerId);
+    replicaContainerIds.set(replica.deploymentId, ids);
+  }
+
+  let stoppedCount = 0;
+  for (const deployment of deployments) {
+    const containerId = deployment.containerId;
+    if (!containerId) continue;
+
+    const containerIds = replicaContainerIds.get(deployment.id) ?? [
+      containerId,
+    ];
+    const live = containerIds.some(function isLive(id) {
+      return isContainerStateLive(findContainerState(states, id));
+    });
+    if (live) continue;
+
+    if (await markDeploymentStopped({ ...deployment, containerId })) {
+      stoppedCount += 1;
+    }
+  }
+
+  return stoppedCount;
+}
+
+export async function runDeploymentReconcilerTick(): Promise<{
+  failedDeployments: number;
+  stoppedDeployments: number;
+}> {
+  const failedDeployments = await failStaleInProgressDeployments();
+  const stoppedDeployments = await reconcileRunningDeployments();
+  return { failedDeployments, stoppedDeployments };
+}
+
+function reconcilerTick(): void {
+  if (reconcilerTickInFlight) {
+    return;
+  }
+  reconcilerTickInFlight = true;
+  runDeploymentReconcilerTick()
+    .then(function onResult(result) {
+      if (result.failedDeployments > 0 || result.stoppedDeployments > 0) {
+        console.log(
+          `[deployment-reconciler] failed ${result.failedDeployments} timed-out deployment(s), stopped ${result.stoppedDeployments} deployment(s) without live containers`,
+        );
+      }
+    })
+    .catch(function onError(error) {
+      console.error("[deployment-reconciler] Error:", error);
+    })
+    .finally(function onFinally() {
+      reconcilerTickInFlight = false;
+    });
+}
+
+/** Background loop keeping deployment rows in sync with docker. */
+export function startDeploymentReconciler(): void {
+  if (reconcilerIntervalId) {
+    return;
+  }
+  reconcilerIntervalId = setInterval(reconcilerTick, RECONCILE_INTERVAL_MS);
+  reconcilerIntervalId.unref?.();
+  reconcilerTick();
+}
+
+export function stopDeploymentReconciler(): void {
+  if (!reconcilerIntervalId) {
+    return;
+  }
+  clearInterval(reconcilerIntervalId);
+  reconcilerIntervalId = null;
 }
 
 async function stopOrphanDeploymentContainers(): Promise<number> {

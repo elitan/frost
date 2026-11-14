@@ -7,6 +7,7 @@ import {
   buildDockerBuildArgs,
   getDatabaseTargetReservedPorts,
   isPortConflictError,
+  parseContainerStates,
   parsePublishedHostPorts,
   resolveBuildPaths,
 } from "./docker";
@@ -180,5 +181,28 @@ describe("isPortConflictError", function describePortConflict() {
     expect(isPortConflictError("Bind for 0.0.0.0:10001 failed")).toBe(true);
     expect(isPortConflictError("Bind for [::]:10001 failed")).toBe(true);
     expect(isPortConflictError("no such image")).toBe(false);
+  });
+});
+
+describe("parseContainerStates", function describeParseContainerStates() {
+  test("parses id and state per line", function testParse() {
+    const output = [
+      `${"a".repeat(64)}\trunning`,
+      `${"b".repeat(64)}\texited`,
+      "",
+      `${"c".repeat(64)}\tRestarting  `,
+    ].join("\n");
+
+    const states = parseContainerStates(output);
+
+    expect(states.size).toBe(3);
+    expect(states.get("a".repeat(64))).toBe("running");
+    expect(states.get("b".repeat(64))).toBe("exited");
+    expect(states.get("c".repeat(64))).toBe("restarting");
+  });
+
+  test("ignores malformed lines and empty output", function testMalformed() {
+    expect(parseContainerStates("").size).toBe(0);
+    expect(parseContainerStates("only-an-id\n\tno-id\n").size).toBe(0);
   });
 });

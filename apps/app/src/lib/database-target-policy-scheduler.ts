@@ -1,4 +1,8 @@
-import { deleteDatabaseTarget, stopDatabaseTarget } from "./database-runtime";
+import {
+  deleteDatabaseTargetUnlocked,
+  stopDatabaseTargetUnlocked,
+  withDatabaseTargetLock,
+} from "./database-runtime";
 import { getDatabaseTargetGatewayActiveConnections } from "./database-target-gateway";
 import type { DatabaseTargetStoppedReason } from "./database-target-status";
 import { db } from "./db";
@@ -40,9 +44,17 @@ type DatabaseTargetPolicySchedulerInput = {
   getNow?: () => number;
   listScaleToZeroTargets?: () => Promise<ScaleToZeroTarget[]>;
   listTtlTargets?: () => Promise<TtlTarget[]>;
+  /** Reloads one target inside the lock to re-check the policy. */
+  getScaleToZeroTarget?: (
+    targetId: string,
+  ) => Promise<ScaleToZeroTarget | null>;
+  getTtlTarget?: (targetId: string) => Promise<TtlTarget | null>;
   getActiveConnections?: (targetId: string) => number;
+  /** Called while holding the target lock. */
   stopTarget?: (input: StopTargetInput) => Promise<unknown>;
+  /** Called while holding the target lock. */
   deleteTarget?: (input: DeleteTargetInput) => Promise<unknown>;
+  withTargetLock?: <T>(targetId: string, task: () => Promise<T>) => Promise<T>;
   logAutoStopError?: (targetId: string, error: unknown) => void;
   logAutoDeleteError?: (targetId: string, error: unknown) => void;
 };
@@ -70,7 +82,7 @@ export function isDatabaseTargetIdleDue(input: {
   return now - lastActivityAt >= input.scaleToZeroMinutes * 60 * 1000;
 }
 
-async function listScaleToZeroTargets(): Promise<ScaleToZeroTarget[]> {
+function scaleToZeroTargetsQuery() {
   return db
     .selectFrom("databaseTargets")
     .innerJoin("databases", "databases.id", "databaseTargets.databaseId")
@@ -85,11 +97,23 @@ async function listScaleToZeroTargets(): Promise<ScaleToZeroTarget[]> {
     .where("databaseTargets.name", "!=", "main")
     .where("databaseTargets.lifecycleStatus", "=", "active")
     .where("databaseTargets.scaleToZeroMinutes", "is not", null)
-    .where("databases.engine", "=", "postgres")
-    .execute();
+    .where("databases.engine", "=", "postgres");
 }
 
-async function listTtlTargets(): Promise<TtlTarget[]> {
+async function listScaleToZeroTargets(): Promise<ScaleToZeroTarget[]> {
+  return scaleToZeroTargetsQuery().execute();
+}
+
+async function getScaleToZeroTarget(
+  targetId: string,
+): Promise<ScaleToZeroTarget | null> {
+  const target = await scaleToZeroTargetsQuery()
+    .where("databaseTargets.id", "=", targetId)
+    .executeTakeFirst();
+  return target ?? null;
+}
+
+function ttlTargetsQuery() {
   return db
     .selectFrom("databaseTargets")
     .innerJoin("databases", "databases.id", "databaseTargets.databaseId")
@@ -105,8 +129,18 @@ async function listTtlTargets(): Promise<TtlTarget[]> {
     .where("databaseTargets.name", "!=", "main")
     .where("databaseTargets.ttlValue", "is not", null)
     .where("databaseTargets.ttlUnit", "is not", null)
-    .where("databases.engine", "=", "postgres")
-    .execute();
+    .where("databases.engine", "=", "postgres");
+}
+
+async function listTtlTargets(): Promise<TtlTarget[]> {
+  return ttlTargetsQuery().execute();
+}
+
+async function getTtlTarget(targetId: string): Promise<TtlTarget | null> {
+  const target = await ttlTargetsQuery()
+    .where("databaseTargets.id", "=", targetId)
+    .executeTakeFirst();
+  return target ?? null;
 }
 
 function logAutoStopError(targetId: string, error: unknown): void {
@@ -129,6 +163,33 @@ function logAutoDeleteError(targetId: string, error: unknown): void {
   );
 }
 
+function isScaleToZeroTargetDue(
+  target: ScaleToZeroTarget,
+  now: number,
+): boolean {
+  if (target.scaleToZeroMinutes === null) {
+    return false;
+  }
+  return isDatabaseTargetIdleDue({
+    lastActivityAt: target.lastActivityAt,
+    createdAt: target.createdAt,
+    scaleToZeroMinutes: target.scaleToZeroMinutes,
+    now,
+  });
+}
+
+function isTtlTargetDue(target: TtlTarget, now: number): boolean {
+  if (target.ttlValue === null || target.ttlUnit === null) {
+    return false;
+  }
+  return isDatabaseTargetTtlExpired({
+    createdAt: target.createdAt,
+    ttlValue: target.ttlValue,
+    ttlUnit: target.ttlUnit,
+    now,
+  });
+}
+
 async function runScaleToZeroPolicy(
   now: number,
   input: DatabaseTargetPolicySchedulerInput,
@@ -136,36 +197,36 @@ async function runScaleToZeroPolicy(
   const targets = await (
     input.listScaleToZeroTargets ?? listScaleToZeroTargets
   )();
+  const reloadTarget = input.getScaleToZeroTarget ?? getScaleToZeroTarget;
   const getActiveConnections =
     input.getActiveConnections ?? getDatabaseTargetGatewayActiveConnections;
-  const stopTarget = input.stopTarget ?? stopDatabaseTarget;
+  const stopTarget = input.stopTarget ?? stopDatabaseTargetUnlocked;
+  const withTargetLock = input.withTargetLock ?? withDatabaseTargetLock;
   const onError = input.logAutoStopError ?? logAutoStopError;
 
   for (const target of targets) {
-    if (target.scaleToZeroMinutes === null) {
-      continue;
-    }
-
     if (getActiveConnections(target.id) > 0) {
       continue;
     }
-
-    if (
-      !isDatabaseTargetIdleDue({
-        lastActivityAt: target.lastActivityAt,
-        createdAt: target.createdAt,
-        scaleToZeroMinutes: target.scaleToZeroMinutes,
-        now,
-      })
-    ) {
+    if (!isScaleToZeroTargetDue(target, now)) {
       continue;
     }
 
     try {
-      await stopTarget({
-        databaseId: target.databaseId,
-        targetId: target.id,
-        stoppedReason: "idle",
+      await withTargetLock(target.id, async function stopIfStillIdle() {
+        // A connection or wake may have happened since the list query.
+        if (getActiveConnections(target.id) > 0) {
+          return;
+        }
+        const current = await reloadTarget(target.id);
+        if (!current || !isScaleToZeroTargetDue(current, now)) {
+          return;
+        }
+        await stopTarget({
+          databaseId: current.databaseId,
+          targetId: current.id,
+          stoppedReason: "idle",
+        });
       });
     } catch (error) {
       onError(target.id, error);
@@ -178,35 +239,34 @@ async function runTtlPolicy(
   input: DatabaseTargetPolicySchedulerInput,
 ): Promise<void> {
   const targets = await (input.listTtlTargets ?? listTtlTargets)();
+  const reloadTarget = input.getTtlTarget ?? getTtlTarget;
   const getActiveConnections =
     input.getActiveConnections ?? getDatabaseTargetGatewayActiveConnections;
-  const deleteTarget = input.deleteTarget ?? deleteDatabaseTarget;
+  const deleteTarget = input.deleteTarget ?? deleteDatabaseTargetUnlocked;
+  const withTargetLock = input.withTargetLock ?? withDatabaseTargetLock;
   const onError = input.logAutoDeleteError ?? logAutoDeleteError;
 
   for (const target of targets) {
-    if (target.ttlValue === null || target.ttlUnit === null) {
+    if (!isTtlTargetDue(target, now)) {
       continue;
     }
-
-    if (
-      !isDatabaseTargetTtlExpired({
-        createdAt: target.createdAt,
-        ttlValue: target.ttlValue,
-        ttlUnit: target.ttlUnit,
-        now,
-      })
-    ) {
-      continue;
-    }
-
     if (getActiveConnections(target.id) > 0) {
       continue;
     }
 
     try {
-      await deleteTarget({
-        databaseId: target.databaseId,
-        targetId: target.id,
+      await withTargetLock(target.id, async function deleteIfStillExpired() {
+        if (getActiveConnections(target.id) > 0) {
+          return;
+        }
+        const current = await reloadTarget(target.id);
+        if (!current || !isTtlTargetDue(current, now)) {
+          return;
+        }
+        await deleteTarget({
+          databaseId: current.databaseId,
+          targetId: current.id,
+        });
       });
     } catch (error) {
       onError(target.id, error);

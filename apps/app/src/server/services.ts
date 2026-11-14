@@ -6,7 +6,6 @@ import { deployService } from "@/lib/deployer";
 import {
   addLatestDeploymentsWithRuntimeStatus,
   addLatestDeploymentWithRuntimeStatus,
-  reconcileDeploymentsRuntimeStatus,
 } from "@/lib/deployment-runtime";
 import { syncCaddyConfig } from "@/lib/domains";
 import { cleanupService } from "@/lib/lifecycle";
@@ -405,15 +404,13 @@ export const services = {
     }
     assertUserService(service);
 
-    const deployments = await db
+    return db
       .selectFrom("deployments")
       .selectAll()
       .where("serviceId", "=", input.serviceId)
       .orderBy("createdAt", "desc")
       .limit(20)
       .execute();
-
-    return reconcileDeploymentsRuntimeStatus(deployments);
   }),
 
   getVolumes: os.services.getVolumes.handler(async ({ input }) => {

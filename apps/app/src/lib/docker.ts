@@ -647,6 +647,38 @@ export async function listFrostContainers(): Promise<FrostContainer[]> {
   }
 }
 
+/** Parses `docker ps --format '{{.ID}}\t{{.State}}'` output into id -> state. */
+export function parseContainerStates(output: string): Map<string, string> {
+  const states = new Map<string, string>();
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const [id, state] = line.split("\t");
+    if (!id || !state) continue;
+    states.set(id.trim(), state.trim().toLowerCase());
+  }
+  return states;
+}
+
+/**
+ * Snapshot of every Frost-managed container's state from one `docker ps`
+ * call. Returns null when docker is unavailable so callers can skip work
+ * instead of treating every container as gone.
+ */
+export async function listManagedContainerStates(): Promise<Map<
+  string,
+  string
+> | null> {
+  try {
+    const { stdout } = await execAsync(
+      `docker ps -a --no-trunc --filter ${shellEscape("label=frost.managed=true")} --format ${shellEscape("{{.ID}}\t{{.State}}")}`,
+    );
+    return parseContainerStates(stdout);
+  } catch {
+    return null;
+  }
+}
+
 export async function gracefulStopContainer(
   name: string,
   timeout: number = 30,

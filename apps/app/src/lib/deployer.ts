@@ -15,6 +15,10 @@ import { db } from "./db";
 import type { Environments, Projects, Registries, Services } from "./db-types";
 import { stopDeploymentContainers } from "./deployment-runtime";
 import {
+  type DeploymentTransitionFields,
+  transitionDeploymentStatus,
+} from "./deployment-status";
+import {
   createRemainingDeployTimeoutMsGetter,
   getDeployTimeoutError,
   getDeployTimeoutMs,
@@ -99,6 +103,13 @@ const IN_PROGRESS_DEPLOYMENT_STATUSES: DeploymentStatus[] = [
   "pulling",
   "building",
   "deploying",
+];
+
+const ROLLBACK_SOURCE_DEPLOYMENT_STATUSES: DeploymentStatus[] = [
+  ...IN_PROGRESS_DEPLOYMENT_STATUSES,
+  "failed",
+  "stopped",
+  "cancelled",
 ];
 
 interface DeploymentClaim {
@@ -200,22 +211,33 @@ async function releaseServiceDeploymentClaim(
     .execute();
 }
 
-async function updateDeployment(
+const FAILABLE_DEPLOYMENT_STATUSES: DeploymentStatus[] = [
+  ...IN_PROGRESS_DEPLOYMENT_STATUSES,
+  "running",
+];
+
+/** Advances an in-progress deployment; no-op once it was cancelled/failed. */
+async function advanceDeploymentStatus(
   id: string,
-  updates: {
-    status?: DeploymentStatus;
-    buildLog?: string;
-    errorMessage?: string;
-    containerId?: string;
-    hostPort?: number;
-    finishedAt?: number;
-  },
-) {
-  await db
-    .updateTable("deployments")
-    .set(updates)
-    .where("id", "=", id)
-    .execute();
+  status: "pulling" | "cloning" | "building" | "deploying",
+): Promise<boolean> {
+  return transitionDeploymentStatus(
+    id,
+    IN_PROGRESS_DEPLOYMENT_STATUSES,
+    status,
+  );
+}
+
+async function failDeployment(
+  id: string,
+  fields: DeploymentTransitionFields,
+): Promise<boolean> {
+  return transitionDeploymentStatus(
+    id,
+    FAILABLE_DEPLOYMENT_STATUSES,
+    "failed",
+    fields,
+  );
 }
 
 async function markDeploymentRunningAndSetCurrentServiceDeployment(
@@ -277,16 +299,13 @@ async function markDeploymentFailedAndRestoreCurrentServiceDeployment(
     .execute();
   const finishedAt = Date.now();
   await db.transaction().execute(async function onFail(trx) {
-    await trx
-      .updateTable("deployments")
-      .set({
-        status: "failed",
-        errorMessage,
-        finishedAt,
-        rollbackEligible: false,
-      })
-      .where("id", "=", deploymentId)
-      .execute();
+    await transitionDeploymentStatus(
+      deploymentId,
+      FAILABLE_DEPLOYMENT_STATUSES,
+      "failed",
+      { errorMessage, finishedAt, rollbackEligible: false },
+      { executor: trx },
+    );
 
     await trx
       .updateTable("services")
@@ -785,11 +804,12 @@ async function cancelActiveDeployments(
       .set({ status: "stopped" })
       .where("deploymentId", "=", dep.id)
       .execute();
-    await db
-      .updateTable("deployments")
-      .set({ status: "cancelled", finishedAt: Date.now() })
-      .where("id", "=", dep.id)
-      .execute();
+    await transitionDeploymentStatus(
+      dep.id,
+      IN_PROGRESS_DEPLOYMENT_STATUSES,
+      "cancelled",
+      { finishedAt: Date.now() },
+    );
     await db
       .deleteFrom("deploymentLocks")
       .where("deploymentId", "=", dep.id)
@@ -1130,11 +1150,9 @@ async function drainPreviousDeployments(
     } else if (prev.containerId) {
       await stopOldContainer(prev.containerId);
     }
-    await db
-      .updateTable("deployments")
-      .set({ status: "stopped", finishedAt: Date.now() })
-      .where("id", "=", prev.id)
-      .execute();
+    await transitionDeploymentStatus(prev.id, ["running"], "stopped", {
+      finishedAt: Date.now(),
+    });
   }
 }
 
@@ -1367,7 +1385,7 @@ async function runServiceDeployment(
       imageName = service.imageUrl;
       const imageTag = imageName.split(":")[1] || "latest";
 
-      await updateDeployment(deploymentId, { status: "pulling" });
+      await advanceDeploymentStatus(deploymentId, "pulling");
 
       const registry = await getRegistryForPull(service);
       if (registry) {
@@ -1441,7 +1459,7 @@ async function runServiceDeployment(
       const repoPath = join(REPOS_PATH, deploymentId);
       clonedRepoPath = repoPath;
 
-      await updateDeployment(deploymentId, { status: "cloning" });
+      await advanceDeploymentStatus(deploymentId, "cloning");
       await appendLog(deploymentId, `Cloning ${service.repoUrl}...\n`);
       await updateCommitStatusIfGitHub(
         service.repoUrl,
@@ -1569,7 +1587,7 @@ async function runServiceDeployment(
         );
       }
 
-      await updateDeployment(deploymentId, { status: "building" });
+      await advanceDeploymentStatus(deploymentId, "building");
       await appendLog(deploymentId, `\nBuilding image...\n`);
       await updateCommitStatusIfGitHub(
         service.repoUrl,
@@ -1616,7 +1634,7 @@ async function runServiceDeployment(
       .where("id", "=", deploymentId)
       .execute();
 
-    await updateDeployment(deploymentId, { status: "deploying" });
+    await advanceDeploymentStatus(deploymentId, "deploying");
     await appendLog(deploymentId, `\nStarting container...\n`);
     await updateCommitStatusIfGitHub(
       service.repoUrl,
@@ -1831,8 +1849,7 @@ async function runServiceDeployment(
           .where("deploymentId", "=", deploymentId)
           .execute();
       }
-      await updateDeployment(deploymentId, {
-        status: "failed",
+      await failDeployment(deploymentId, {
         errorMessage,
         finishedAt: Date.now(),
       });
@@ -2014,20 +2031,23 @@ export async function rollbackDeployment(
   }
 
   return withServiceDeploymentLock(service.id, async function rollbackTask() {
-    const claim = await claimServiceDeployment(service.id, deploymentId);
-    await cancelActiveDeployments(service.id, deploymentId);
-
-    await db
-      .updateTable("deployments")
-      .set({
-        status: "deploying",
+    const restarted = await transitionDeploymentStatus(
+      deploymentId,
+      ROLLBACK_SOURCE_DEPLOYMENT_STATUSES,
+      "deploying",
+      {
         trigger: "rollback",
         createdAt: Date.now(),
         finishedAt: null,
         errorMessage: null,
-      })
-      .where("id", "=", deploymentId)
-      .execute();
+      },
+    );
+    if (!restarted) {
+      throw new Error("Deployment is already running");
+    }
+
+    const claim = await claimServiceDeployment(service.id, deploymentId);
+    await cancelActiveDeployments(service.id, deploymentId);
 
     runRollbackDeployment(
       deploymentId,
@@ -2236,8 +2256,7 @@ async function runRollbackDeployment(
           .where("deploymentId", "=", deploymentId)
           .execute();
       }
-      await updateDeployment(deploymentId, {
-        status: "failed",
+      await failDeployment(deploymentId, {
         errorMessage,
         finishedAt: Date.now(),
       });
