@@ -37,7 +37,7 @@ R0_CONTAINER=$(json_get "$REPLICAS" '.[0].containerId')
 [ "$R0_PORT" != "null" ] && [ -n "$R0_PORT" ] || fail "Replica 0 missing hostPort"
 [ "$R0_CONTAINER" != "null" ] && [ -n "$R0_CONTAINER" ] || fail "Replica 0 missing containerId"
 
-curl -sf "http://$SERVER_IP:$R0_PORT" > /dev/null || fail "Replica 0 not responding on port $R0_PORT"
+service_curl "$R0_PORT" > /dev/null || fail "Replica 0 not responding on port $R0_PORT"
 log "Test 1 passed: single replica running on port $R0_PORT"
 
 # --- Test 2: Deploy with 3 replicas ---
@@ -62,7 +62,7 @@ for i in 0 1 2; do
   STATUS=$(json_get "$REPLICAS2" ".[$i].status")
   PORT=$(json_get "$REPLICAS2" ".[$i].hostPort")
   [ "$STATUS" = "running" ] || fail "Replica $i status: $STATUS"
-  curl -sf "http://$SERVER_IP:$PORT" > /dev/null || fail "Replica $i not responding on port $PORT"
+  service_curl "$PORT" > /dev/null || fail "Replica $i not responding on port $PORT"
 done
 
 SANITIZED_PREFIX=$(sanitize_name "frost-${SERVICE_ID}")

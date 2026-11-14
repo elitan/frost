@@ -32,6 +32,7 @@ import {
   type FileMount,
   getAvailablePort,
   isPortConflictError,
+  type PortBinding,
   runContainer,
   stopContainer,
   waitForHealthy,
@@ -384,6 +385,21 @@ function getTargetRuntimeHostPort(
   return providerRef.hostPort;
 }
 
+/**
+ * A target's container publishes either its public port (providerRef.hostPort,
+ * what users connect to) or, with scale-to-zero, a hidden runtime port that
+ * only the gateway on the public port proxies to. Only the former is exposed
+ * on all interfaces.
+ */
+export function getRuntimePortBinding(
+  hostPort: number | undefined,
+  providerRef: Pick<ProviderRef, "hostPort">,
+): PortBinding {
+  return hostPort !== undefined && hostPort === providerRef.hostPort
+    ? "all"
+    : "loopback";
+}
+
 function applyProviderRefRuntimePorts(input: {
   target: Pick<DatabaseTargets, "runtimeHostPort">;
   previousProviderRef: ProviderRef;
@@ -532,39 +548,47 @@ async function waitForPostgresReady(providerRef: ProviderRef): Promise<void> {
   );
 }
 
-function getDockerHostArgs(): string[] {
-  if (process.platform !== "linux") {
-    return [];
-  }
-
-  return ["--add-host", "host.docker.internal:host-gateway"];
+/**
+ * Verifies the target accepts TLS connections over TCP. The helper joins the
+ * target container's network namespace instead of dialing the published host
+ * port via host.docker.internal: hidden runtime ports are bound to 127.0.0.1,
+ * which host-gateway cannot reach. The host-side mapping itself is covered by
+ * waitForHealthy's TCP check on 127.0.0.1:<hostPort>.
+ */
+export function buildPostgresTlsProbeArgs(
+  providerRef: Pick<
+    ProviderRef,
+    "containerName" | "image" | "port" | "username" | "database"
+  >,
+): string[] {
+  return [
+    "run",
+    "--rm",
+    "--network",
+    `container:${providerRef.containerName}`,
+    "-e",
+    "PGPASSWORD",
+    providerRef.image || "postgres:17",
+    "psql",
+    `host=127.0.0.1 port=${providerRef.port} user=${providerRef.username} dbname=${providerRef.database} sslmode=require connect_timeout=5`,
+    "-X",
+    "-t",
+    "-A",
+    "-c",
+    "select 1",
+  ];
 }
 
 async function waitForPostgresPublishedReady(
   providerRef: ProviderRef,
 ): Promise<void> {
   const deadline = Date.now() + 120000;
-  const helperImage = providerRef.image || "postgres:17";
 
   while (Date.now() < deadline) {
     try {
       const { stdout } = await execFileAsync(
         "docker",
-        [
-          "run",
-          "--rm",
-          ...getDockerHostArgs(),
-          "-e",
-          "PGPASSWORD",
-          helperImage,
-          "psql",
-          `host=host.docker.internal port=${providerRef.hostPort} user=${providerRef.username} dbname=${providerRef.database} sslmode=require connect_timeout=5`,
-          "-X",
-          "-t",
-          "-A",
-          "-c",
-          "select 1",
-        ],
+        buildPostgresTlsProbeArgs(providerRef),
         { env: { ...process.env, PGPASSWORD: providerRef.password } },
       );
       if (stdout.trim() === "1") {
@@ -576,7 +600,7 @@ async function waitForPostgresPublishedReady(
   }
 
   throw new Error(
-    `Postgres target ${providerRef.containerName} did not accept published TLS connections`,
+    `Postgres target ${providerRef.containerName} did not accept TLS connections`,
   );
 }
 
@@ -701,6 +725,12 @@ async function createTargetRuntime(input: {
   fixedHostPort?: number;
   excludedHostPorts?: Set<number>;
   storageMountPath?: string;
+  /**
+   * "all" when the container port is the target's public (user-facing) port;
+   * "loopback" when it is a hidden runtime port behind the scale-to-zero
+   * gateway, which already listens publicly on the stable host port.
+   */
+  portBinding: PortBinding;
 }): Promise<ProviderRef> {
   const isPostgres = input.engine === "postgres";
   const image =
@@ -780,6 +810,7 @@ async function createTargetRuntime(input: {
       imageName: image,
       hostPort,
       containerPort: port,
+      portBinding: input.portBinding,
       name: containerName,
       entrypoint,
       envVars,
@@ -862,6 +893,12 @@ async function recreateTargetRuntime(input: {
   // avoid two runtimes on the same data directory.
   await stopContainer(input.providerRef.containerName);
 
+  const fixedHostPort =
+    input.fixedHostPort ??
+    (input.preserveCurrentHostPort === false
+      ? undefined
+      : input.providerRef.hostPort);
+
   const nextRef = await createTargetRuntime({
     databaseId: input.database.id,
     targetId: input.target.id,
@@ -870,13 +907,10 @@ async function recreateTargetRuntime(input: {
     runtimeServiceId: input.target.runtimeServiceId,
     engine: input.database.engine as DatabaseEngine,
     templateRef: input.providerRef,
-    fixedHostPort:
-      input.fixedHostPort ??
-      (input.preserveCurrentHostPort === false
-        ? undefined
-        : input.providerRef.hostPort),
+    fixedHostPort,
     excludedHostPorts: input.excludedHostPorts,
     storageMountPath,
+    portBinding: getRuntimePortBinding(fixedHostPort, input.providerRef),
   });
 
   if (storage) {
@@ -1243,6 +1277,7 @@ export async function createDatabase(input: {
       engine: input.engine,
       image: input.image,
       storageMountPath,
+      portBinding: "all",
     });
     await waitForTargetReady(input.engine, providerRef);
     rollback.add(async () => {
@@ -1371,6 +1406,7 @@ export async function createDatabaseTarget(input: {
         engine: "postgres",
         templateRef: sourceRef,
         storageMountPath: clonedStorage.mountPath,
+        portBinding: "all",
       });
       applyProviderRefStorage(providerRef, clonedStorage);
     } else {
@@ -1381,6 +1417,7 @@ export async function createDatabaseTarget(input: {
         targetName: input.name,
         runtimeServiceId,
         engine: database.engine as DatabaseEngine,
+        portBinding: "all",
       });
     }
     await waitForTargetReady(database.engine as DatabaseEngine, providerRef);
@@ -1503,6 +1540,7 @@ export async function resetDatabaseTarget(input: {
     cpuLimit: currentRef.cpuLimit,
   };
 
+  const resetHostPort = getTargetRuntimeHostPort(target, currentRef);
   let nextRef: ProviderRef;
   try {
     nextRef = await createTargetRuntime({
@@ -1513,8 +1551,9 @@ export async function resetDatabaseTarget(input: {
       runtimeServiceId: target.runtimeServiceId,
       engine: "postgres",
       templateRef,
-      fixedHostPort: getTargetRuntimeHostPort(target, currentRef),
+      fixedHostPort: resetHostPort,
       storageMountPath: liveMountPath,
+      portBinding: getRuntimePortBinding(resetHostPort, currentRef),
     });
     await waitForTargetReady("postgres", nextRef);
   } catch (error) {

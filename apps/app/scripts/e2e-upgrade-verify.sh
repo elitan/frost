@@ -182,12 +182,12 @@ CONTAINER_ID=$(echo "$DEPLOYMENT" | jq -r '.containerId // empty')
 echo "  HOST_PORT=$HOST_PORT"
 echo "  CONTAINER_ID=$CONTAINER_ID"
 
-if curl -sf "http://$SERVER_IP:$HOST_PORT" > /dev/null; then
+if ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=10 root@$SERVER_IP "curl -sf --max-time 10 http://127.0.0.1:$HOST_PORT" > /dev/null; then
   echo "PASS: Container responding on port $HOST_PORT"
 else
   echo "FAIL: Container not responding on port $HOST_PORT"
   echo "  curl exit code: $?"
-  curl -v "http://$SERVER_IP:$HOST_PORT" 2>&1 || true
+  ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=10 root@$SERVER_IP "curl -v --max-time 10 http://127.0.0.1:$HOST_PORT" 2>&1 || true
   FAILED=1
 fi
 

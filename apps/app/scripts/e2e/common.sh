@@ -169,6 +169,14 @@ get_setup_token() {
   remote "grep '^FROST_SETUP_TOKEN=' /opt/frost/.env 2>/dev/null | tail -1 | cut -d= -f2-" 2>/dev/null || true
 }
 
+# Service host ports are published on 127.0.0.1 only, so curl them from the
+# Frost host itself. Usage: service_curl <host-port> [path]
+service_curl() {
+  local PORT=$1
+  local URL_PATH=${2:-/}
+  remote "curl -sf --max-time 10 'http://127.0.0.1:$PORT$URL_PATH'"
+}
+
 wait_for_network_http_body() {
   local NETWORK_NAME=$1
   local URL=$2

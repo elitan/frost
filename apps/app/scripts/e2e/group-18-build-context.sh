@@ -46,7 +46,7 @@ wait_for_deployment "$DEPLOYMENT_ID" 120 || fail "Deployment failed"
 log "Verifying service responds with shared content..."
 DEPLOY_DATA=$(api "$BASE_URL/api/deployments/$DEPLOYMENT_ID")
 HOST_PORT=$(require_field "$DEPLOY_DATA" '.hostPort' "get hostPort") || fail "No hostPort: $DEPLOY_DATA"
-RESPONSE=$(curl -sf "http://$SERVER_IP:$HOST_PORT" || echo "FAILED")
+RESPONSE=$(service_curl "$HOST_PORT" || echo "FAILED")
 echo "$RESPONSE" | grep -q "monorepo-test" || fail "Response missing shared content: $RESPONSE"
 log "Service responding with shared content on port $HOST_PORT"
 

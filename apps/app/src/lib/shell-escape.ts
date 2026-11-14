@@ -9,6 +9,7 @@ export function buildDockerRunArgs(options: RunContainerOptions): string[] {
     imageName,
     hostPort,
     containerPort = 8080,
+    portBinding = "loopback",
     name,
     entrypoint,
     envVars,
@@ -46,7 +47,12 @@ export function buildDockerRunArgs(options: RunContainerOptions): string[] {
   }
 
   args.push("--name", name);
-  args.push("-p", `${hostPort}:${containerPort}`);
+  args.push(
+    "-p",
+    portBinding === "all"
+      ? `${hostPort}:${containerPort}`
+      : `127.0.0.1:${hostPort}:${containerPort}`,
+  );
 
   if (network) {
     args.push("--network", network);

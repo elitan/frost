@@ -24,7 +24,7 @@ function buildCaddyConfig(
       const upstreams =
         route.type === "frost-admin"
           ? [{ dial: "localhost:3000" }]
-          : route.hostPorts.map((p) => ({ dial: `localhost:${p}` }));
+          : route.hostPorts.map((p) => ({ dial: `127.0.0.1:${p}` }));
 
       const reverseProxyHandler: Record<string, unknown> = {
         handler: "reverse_proxy",
@@ -74,7 +74,7 @@ describe("buildCaddyConfig", () => {
   test("generates reverse proxy without timeout when not set", () => {
     const handler = buildAndGetHandler(proxyRoute());
     expect(handler.handler).toBe("reverse_proxy");
-    expect(handler.upstreams[0].dial).toBe("localhost:10001");
+    expect(handler.upstreams[0].dial).toBe("127.0.0.1:10001");
     expect(handler.transport).toBeUndefined();
   });
 
@@ -103,9 +103,9 @@ describe("buildCaddyConfig", () => {
       proxyRoute({ hostPorts: [10001, 10002, 10003] }),
     );
     expect(handler.upstreams).toHaveLength(3);
-    expect(handler.upstreams[0].dial).toBe("localhost:10001");
-    expect(handler.upstreams[1].dial).toBe("localhost:10002");
-    expect(handler.upstreams[2].dial).toBe("localhost:10003");
+    expect(handler.upstreams[0].dial).toBe("127.0.0.1:10001");
+    expect(handler.upstreams[1].dial).toBe("127.0.0.1:10002");
+    expect(handler.upstreams[2].dial).toBe("127.0.0.1:10003");
   });
 
   test("round_robin when > 1 upstream", () => {

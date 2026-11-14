@@ -6,6 +6,8 @@ import { envVarListToRecord, selectBuildTimeEnvVars } from "./build-env";
 import {
   buildDockerBuildArgs,
   getDatabaseTargetReservedPorts,
+  isPortConflictError,
+  parsePublishedHostPorts,
   resolveBuildPaths,
 } from "./docker";
 
@@ -143,5 +145,40 @@ describe("resolveBuildPaths", function describeResolveBuildPaths() {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("parsePublishedHostPorts", function describeParsePorts() {
+  test("recognizes loopback, IPv4 and IPv6 bindings", function testBindings() {
+    const output = [
+      "127.0.0.1:10001->8080/tcp",
+      "0.0.0.0:10002->80/tcp, [::]:10002->80/tcp",
+      ":::10003->5432/tcp",
+      "5432/tcp",
+      "",
+    ].join("\n");
+
+    expect([...parsePublishedHostPorts(output)].sort()).toEqual([
+      10001, 10002, 10003,
+    ]);
+  });
+
+  test("expands published port ranges", function testRanges() {
+    expect([
+      ...parsePublishedHostPorts("127.0.0.1:10010-10012->9000-9002/tcp"),
+    ]).toEqual([10010, 10011, 10012]);
+  });
+});
+
+describe("isPortConflictError", function describePortConflict() {
+  test("detects loopback and wildcard bind failures", function testBindErrors() {
+    expect(
+      isPortConflictError(
+        "Bind for 127.0.0.1:10001 failed: port is already allocated",
+      ),
+    ).toBe(true);
+    expect(isPortConflictError("Bind for 0.0.0.0:10001 failed")).toBe(true);
+    expect(isPortConflictError("Bind for [::]:10001 failed")).toBe(true);
+    expect(isPortConflictError("no such image")).toBe(false);
   });
 });

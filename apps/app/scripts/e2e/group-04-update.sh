@@ -26,7 +26,7 @@ wait_for_deployment "$DEPLOY_ID" || fail "v1 deployment failed"
 
 DEPLOY_DATA=$(api "$BASE_URL/api/deployments/$DEPLOY_ID")
 HOST_PORT=$(require_field "$DEPLOY_DATA" '.hostPort' "get v1 hostPort") || fail "No v1 hostPort: $DEPLOY_DATA"
-RESPONSE1=$(curl -sf "http://$SERVER_IP:$HOST_PORT")
+RESPONSE1=$(service_curl "$HOST_PORT")
 echo "$RESPONSE1" | grep -q "nginx" || fail "v1 not responding correctly"
 log "v1 (nginx) deployed"
 
@@ -40,7 +40,7 @@ wait_for_deployment "$DEPLOY2_ID" || fail "v2 deployment failed"
 
 DEPLOY2_DATA=$(api "$BASE_URL/api/deployments/$DEPLOY2_ID")
 HOST_PORT2=$(require_field "$DEPLOY2_DATA" '.hostPort' "get v2 hostPort") || fail "No v2 hostPort: $DEPLOY2_DATA"
-RESPONSE2=$(curl -sf "http://$SERVER_IP:$HOST_PORT2")
+RESPONSE2=$(service_curl "$HOST_PORT2")
 echo "$RESPONSE2" | grep -q "It works" || fail "v2 not responding correctly"
 log "v2 (httpd) deployed"
 

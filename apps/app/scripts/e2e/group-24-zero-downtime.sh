@@ -32,7 +32,7 @@ log "Verifying v1 responds..."
 DEPLOY1_DATA=$(api "$BASE_URL/api/deployments/$DEPLOY1_ID")
 HOST_PORT1=$(require_field "$DEPLOY1_DATA" '.hostPort' "get hostPort") || fail "Failed: $DEPLOY1_DATA"
 CONTAINER1_ID=$(json_get "$DEPLOY1_DATA" '.containerId // empty')
-curl -sf "http://$SERVER_IP:$HOST_PORT1" > /dev/null || fail "v1 not responding on port $HOST_PORT1"
+service_curl "$HOST_PORT1" > /dev/null || fail "v1 not responding on port $HOST_PORT1"
 log "v1 responding on port $HOST_PORT1"
 
 log "Updating to httpd:alpine and deploying v2..."
@@ -45,7 +45,7 @@ log "Verifying v2 responds..."
 DEPLOY2_DATA=$(api "$BASE_URL/api/deployments/$DEPLOY2_ID")
 HOST_PORT2=$(require_field "$DEPLOY2_DATA" '.hostPort' "get hostPort") || fail "Failed: $DEPLOY2_DATA"
 CONTAINER2_ID=$(json_get "$DEPLOY2_DATA" '.containerId // empty')
-curl -sf "http://$SERVER_IP:$HOST_PORT2" > /dev/null || fail "v2 not responding on port $HOST_PORT2"
+service_curl "$HOST_PORT2" > /dev/null || fail "v2 not responding on port $HOST_PORT2"
 log "v2 responding on port $HOST_PORT2"
 if [ -n "$CONTAINER1_ID" ] && [ "$CONTAINER1_ID" != "null" ]; then
   log "v1 container id: ${CONTAINER1_ID:0:12}"

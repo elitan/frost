@@ -53,7 +53,7 @@ log "Service currentDeploymentId updated"
 log "Verifying rollback service responds..."
 ROLLBACK_DATA=$(api "$BASE_URL/api/deployments/$ROLLBACK_DEPLOY_ID")
 HOST_PORT=$(require_field "$ROLLBACK_DATA" '.hostPort' "get rollback hostPort") || fail "No rollback hostPort: $ROLLBACK_DATA"
-curl -sf "http://$SERVER_IP:$HOST_PORT" > /dev/null || fail "Rollback service not responding on port $HOST_PORT"
+service_curl "$HOST_PORT" > /dev/null || fail "Rollback service not responding on port $HOST_PORT"
 log "Rollback service responding"
 
 log "Cleanup..."

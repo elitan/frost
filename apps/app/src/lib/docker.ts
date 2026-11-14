@@ -510,10 +510,19 @@ export interface FileMount {
   containerPath: string;
 }
 
+/**
+ * Which host interfaces a published container port binds to. "loopback"
+ * (default) keeps it reachable only from the host itself (Caddy, health
+ * checks, the database gateway); "all" publishes on every interface and is
+ * reserved for ports users are meant to connect to directly.
+ */
+export type PortBinding = "loopback" | "all";
+
 export interface RunContainerOptions {
   imageName: string;
   hostPort: number;
   containerPort?: number;
+  portBinding?: PortBinding;
   name: string;
   entrypoint?: string;
   envVars?: Record<string, string>;
@@ -748,7 +757,9 @@ export function isPortConflictError(error: string): boolean {
   return (
     error.includes("port is already allocated") ||
     error.includes("address already in use") ||
-    error.includes("Bind for 0.0.0.0:")
+    error.includes("Bind for 0.0.0.0:") ||
+    error.includes("Bind for 127.0.0.1:") ||
+    error.includes("Bind for [::]:")
   );
 }
 
@@ -803,6 +814,23 @@ export function getDatabaseTargetReservedPorts(input: {
   return [...ports];
 }
 
+/**
+ * Extract published host ports from `docker ps --format '{{.Ports}}'` output,
+ * e.g. "127.0.0.1:10001->8080/tcp" or "0.0.0.0:10002->80/tcp, [::]:10002->80/tcp".
+ * Exposed-but-unpublished ports ("5432/tcp") are ignored.
+ */
+export function parsePublishedHostPorts(output: string): Set<number> {
+  const ports = new Set<number>();
+  for (const match of output.matchAll(/:(\d+)(?:-(\d+))?->/g)) {
+    const start = Number.parseInt(match[1], 10);
+    const end = match[2] ? Number.parseInt(match[2], 10) : start;
+    for (let port = start; port <= end; port++) {
+      ports.add(port);
+    }
+  }
+  return ports;
+}
+
 export async function getAvailablePort(
   start: number = 10000,
   end: number = 20000,
@@ -812,9 +840,8 @@ export async function getAvailablePort(
 
   try {
     const { stdout } = await execAsync(`docker ps -a --format '{{.Ports}}'`);
-    const portMatches = stdout.matchAll(/0\.0\.0\.0:(\d+)/g);
-    for (const match of portMatches) {
-      usedPorts.add(parseInt(match[1], 10));
+    for (const port of parsePublishedHostPorts(stdout)) {
+      usedPorts.add(port);
     }
   } catch {
     // Ignore errors

@@ -54,8 +54,39 @@ describe("buildDockerRunArgs", () => {
     expect(args).toContain("--name");
     expect(args[args.indexOf("--name") + 1]).toBe("mycontainer");
     expect(args).toContain("-p");
-    expect(args[args.indexOf("-p") + 1]).toBe("10000:8080");
+    expect(args[args.indexOf("-p") + 1]).toBe("127.0.0.1:10000:8080");
     expect(args[args.length - 1]).toBe("myimage:latest");
+  });
+
+  test("publishes on loopback by default", () => {
+    const args = buildDockerRunArgs({
+      imageName: "myimage",
+      hostPort: 12345,
+      name: "test",
+    });
+    expect(args[args.indexOf("-p") + 1]).toBe("127.0.0.1:12345:8080");
+  });
+
+  test("explicit loopback binding", () => {
+    const args = buildDockerRunArgs({
+      imageName: "myimage",
+      hostPort: 12345,
+      containerPort: 5432,
+      portBinding: "loopback",
+      name: "test",
+    });
+    expect(args[args.indexOf("-p") + 1]).toBe("127.0.0.1:12345:5432");
+  });
+
+  test("all-interfaces binding omits host ip", () => {
+    const args = buildDockerRunArgs({
+      imageName: "myimage",
+      hostPort: 12345,
+      containerPort: 5432,
+      portBinding: "all",
+      name: "test",
+    });
+    expect(args[args.indexOf("-p") + 1]).toBe("12345:5432");
   });
 
   test("env vars are passed as -e flags", () => {

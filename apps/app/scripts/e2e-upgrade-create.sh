@@ -136,7 +136,7 @@ wait_for_deployment "$DEPLOYMENT_ID"
 echo ""
 echo "=== Verifying container responds ==="
 HOST_PORT=$(api "$BASE_URL/api/deployments/$DEPLOYMENT_ID" | jq -r '.hostPort')
-if curl -sf "http://$SERVER_IP:$HOST_PORT" > /dev/null; then
+if ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=10 root@$SERVER_IP "curl -sf --max-time 10 http://127.0.0.1:$HOST_PORT" > /dev/null; then
   echo "Container responding on port $HOST_PORT"
 else
   echo "Container not responding"

@@ -37,7 +37,7 @@ wait_for_deployment "$DEPLOYMENT_ID" || fail "Deployment failed"
 log "Verifying service responds..."
 DEPLOYMENT_DATA=$(api "$BASE_URL/api/deployments/$DEPLOYMENT_ID")
 HOST_PORT=$(require_field "$DEPLOYMENT_DATA" '.hostPort' "get hostPort") || fail "Failed to get hostPort: $DEPLOYMENT_DATA"
-curl -sf "http://$SERVER_IP:$HOST_PORT" > /dev/null || fail "Service not responding on port $HOST_PORT"
+service_curl "$HOST_PORT" > /dev/null || fail "Service not responding on port $HOST_PORT"
 log "Service responding on port $HOST_PORT"
 
 log "Cleanup..."

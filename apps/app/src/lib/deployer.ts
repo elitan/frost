@@ -33,6 +33,7 @@ import {
   isContainerNameConflictError,
   isPortConflictError,
   isTransientContainerStartError,
+  type PortBinding,
   pullImage,
   type RunContainerOptions,
   runContainer,
@@ -57,6 +58,10 @@ import {
   resolveDeploymentEnvVarList,
 } from "./preview-env-vars";
 import { runCommand } from "./process-runner";
+import {
+  decideServicePortBinding,
+  describeServicePortBinding,
+} from "./service-port-binding";
 import { USER_FACING_SERVICE_TYPES } from "./service-visibility";
 import { shellEscape } from "./shell-escape";
 import { slugify } from "./slugify";
@@ -603,6 +608,40 @@ async function releaseReplicaPortReservation(
     .execute();
 }
 
+/**
+ * Loopback-only when Caddy serves the service through a domain; otherwise the
+ * raw <server-ip>:<host-port> is how users reach it, so publish publicly.
+ * See decideServicePortBinding. Logs the decision to the build log.
+ */
+async function getServicePortBinding(
+  deploymentId: string,
+  service: Pick<Selectable<Services>, "id" | "serviceType">,
+): Promise<PortBinding> {
+  const domains = await db
+    .selectFrom("domains")
+    .select(["type", "dnsVerified", "isSystem"])
+    .where("serviceId", "=", service.id)
+    .execute();
+  const objectStorage =
+    service.serviceType === "object-storage"
+      ? await db
+          .selectFrom("objectStorages")
+          .select("externalEndpoint")
+          .where("runtimeServiceId", "=", service.id)
+          .executeTakeFirst()
+      : undefined;
+
+  const binding = decideServicePortBinding({
+    serviceType: service.serviceType,
+    domains,
+    objectStorage: objectStorage
+      ? { hasExternalEndpoint: Boolean(objectStorage.externalEndpoint) }
+      : null,
+  });
+  await appendLog(deploymentId, describeServicePortBinding(binding));
+  return binding;
+}
+
 async function runContainerWithPortRetry(
   replicaId: string,
   options: Omit<RunContainerOptions, "hostPort">,
@@ -780,6 +819,7 @@ interface StartReplicasOptions {
   containerName: string;
   imageName: string;
   containerPort?: number;
+  portBinding: PortBinding;
   runtimeEnvVars: Record<string, string>;
   networkName: string;
   internalHostname: string;
@@ -846,6 +886,7 @@ async function startReplicas(
           {
             imageName: opts.imageName,
             containerPort: opts.containerPort,
+            portBinding: opts.portBinding,
             name: replicaContainerName,
             envVars: replicaEnvVars,
             network: opts.networkName,
@@ -1679,6 +1720,7 @@ async function runServiceDeployment(
       containerName,
       imageName,
       containerPort: effectiveService.containerPort ?? undefined,
+      portBinding: await getServicePortBinding(deploymentId, service),
       runtimeEnvVars,
       networkName,
       internalHostname,
@@ -2101,6 +2143,7 @@ async function runRollbackDeployment(
       containerName,
       imageName: sourceDeployment.imageName,
       containerPort: sourceDeployment.containerPort ?? undefined,
+      portBinding: await getServicePortBinding(deploymentId, service),
       runtimeEnvVars,
       networkName,
       internalHostname,

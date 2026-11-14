@@ -78,7 +78,7 @@ wait_for_deployment "$TRIGGERED" 90 || fail "Webhook deployment failed"
 
 DEPLOY_DATA=$(api "$BASE_URL/api/deployments/$TRIGGERED")
 HOST_PORT=$(require_field "$DEPLOY_DATA" '.hostPort' "get webhook deploy port") || fail "No hostPort: $DEPLOY_DATA"
-RESPONSE=$(curl -sf "http://$SERVER_IP:$HOST_PORT" 2>&1 || true)
+RESPONSE=$(service_curl "$HOST_PORT" 2>&1 || true)
 echo "$RESPONSE" | grep -q "Hello from simple-node" || fail "Service response unexpected: $RESPONSE"
 log "Webhook-deployed service responds correctly"
 

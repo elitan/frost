@@ -355,7 +355,7 @@ export function buildCaddyConfig(
       const upstreams =
         route.type === "frost-admin"
           ? [{ dial: "localhost:3000" }]
-          : route.hostPorts.map((p) => ({ dial: `localhost:${p}` }));
+          : route.hostPorts.map((p) => ({ dial: `127.0.0.1:${p}` }));
 
       const reverseProxyHandler: Record<string, unknown> = {
         handler: "reverse_proxy",

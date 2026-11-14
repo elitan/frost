@@ -35,7 +35,7 @@ REPLICA_COUNT=$(echo "$REPLICAS" | jq 'length')
 # Hit each replica to generate access logs
 for i in 0 1; do
   PORT=$(json_get "$REPLICAS" ".[$i].hostPort")
-  curl -sf "http://$SERVER_IP:$PORT/replica-log-test" > /dev/null 2>&1 || true
+  service_curl "$PORT" "/replica-log-test" > /dev/null 2>&1 || true
 done
 
 LOG_OUTPUT=""
