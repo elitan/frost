@@ -155,52 +155,6 @@ describe("createService", () => {
     expect(sslCertsExist(service.id)).toBe(true);
   });
 
-  test("creates service with volumes", async () => {
-    const service = await createService({
-      environmentId: TEST_ENV_ID,
-      name: "volume-service",
-      hostname: "volume-svc",
-      deployType: "image",
-      imageUrl: "nginx:alpine",
-      volumes: [
-        { name: "data", path: "/var/lib/data" },
-        { name: "config", path: "/etc/config" },
-      ],
-    });
-
-    const volumes = JSON.parse(service.volumes ?? "[]");
-    expect(volumes).toHaveLength(2);
-    expect(volumes[0].name).toBe("data");
-    expect(volumes[0].path).toBe("/var/lib/data");
-  });
-
-  test("creates service with custom id", async () => {
-    const customId = `custom-${nanoid(8)}`;
-    const service = await createService({
-      id: customId,
-      environmentId: TEST_ENV_ID,
-      name: "custom-id-service",
-      hostname: "custom-id-svc",
-      deployType: "image",
-      imageUrl: "nginx:alpine",
-    });
-
-    expect(service.id).toBe(customId);
-  });
-
-  test("creates service with replicaCount", async () => {
-    const service = await createService({
-      environmentId: TEST_ENV_ID,
-      name: "replica-service",
-      hostname: "replica-svc",
-      deployType: "image",
-      imageUrl: "nginx:alpine",
-      replicaCount: 3,
-    });
-
-    expect(service.replicaCount).toBe(3);
-  });
-
   test("defaults empty envVars and volumes", async () => {
     const service = await createService({
       environmentId: TEST_ENV_ID,

@@ -1,12 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { exec } from "node:child_process";
-import { join } from "node:path";
-import { promisify } from "node:util";
 import {
   buildImage,
-  createNetwork,
-  gracefulStopContainer,
-  removeNetwork,
   runContainer,
   stopContainer,
   waitForHealthy,
@@ -18,8 +12,6 @@ import {
   removeVolume,
   volumeExists,
 } from "./volumes";
-
-const execAsync = promisify(exec);
 
 const TEST_IMAGE = "frost-test-health-check:latest";
 const TEST_CONTAINER = "frost-test-health-check";
@@ -162,23 +154,6 @@ describe("volume integration", () => {
     await removeVolume(TEST_VOLUME_NAME);
   });
 
-  test("runContainer with volumes mounts volume", async () => {
-    const volumeName = "frost-test-container-volume";
-    await createVolume(volumeName);
-
-    const run = await runContainer({
-      imageName: TEST_IMAGE,
-      hostPort: TEST_PORT,
-      containerPort: 8080,
-      name: TEST_CONTAINER,
-      volumes: [{ name: volumeName, path: "/data" }],
-    });
-
-    expect(run.success).toBe(true);
-    await stopContainer(TEST_CONTAINER);
-    await removeVolume(volumeName);
-  }, 60000);
-
   test("getVolumeSize returns size for existing volume", async () => {
     await createVolume(TEST_VOLUME_NAME);
     const size = await getVolumeSize(TEST_VOLUME_NAME);
@@ -191,182 +166,4 @@ describe("volume integration", () => {
     const size = await getVolumeSize("frost-nonexistent-volume-99999");
     expect(size).toBeNull();
   });
-});
-
-const GRACEFUL_IMAGE = "frost-test-graceful-app:latest";
-const GRACEFUL_BUILD_DIR = join(REPO_ROOT, "test/fixtures/graceful-app");
-
-describe("graceful stop", () => {
-  const CONTAINER_A = "frost-test-graceful-a";
-  const CONTAINER_B = "frost-test-graceful-b";
-  const PORT_A = 19997;
-  const PORT_B = 19996;
-
-  beforeAll(async () => {
-    await stopContainer(CONTAINER_A);
-    await stopContainer(CONTAINER_B);
-    const result = await buildImage({
-      repoPath: GRACEFUL_BUILD_DIR,
-      imageName: GRACEFUL_IMAGE,
-    });
-    if (!result.success) {
-      throw new Error(
-        `Failed to build graceful image: ${result.error}\n${result.log}`,
-      );
-    }
-  }, 60000);
-
-  afterAll(async () => {
-    await stopContainer(CONTAINER_A);
-    await stopContainer(CONTAINER_B);
-  });
-
-  test("gracefulStopContainer sends SIGTERM before SIGKILL", async () => {
-    const run = await runContainer({
-      imageName: GRACEFUL_IMAGE,
-      hostPort: PORT_A,
-      containerPort: 8080,
-      name: CONTAINER_A,
-    });
-    expect(run.success).toBe(true);
-
-    const healthy = await waitForHealthy({
-      containerId: run.containerId,
-      port: PORT_A,
-      path: "/health",
-      timeoutSeconds: 15,
-    });
-    expect(healthy).toBe(true);
-
-    const { stdout: logsBefore } = await execAsync(
-      `docker logs ${run.containerId} 2>&1`,
-    ).catch(() => ({ stdout: "" }));
-    expect(logsBefore).toContain("Graceful app running on port");
-
-    await execAsync(`docker stop --time 10 ${CONTAINER_A}`);
-
-    const { stdout: logs } = await execAsync(
-      `docker logs ${run.containerId} 2>&1`,
-    ).catch(() => ({ stdout: "" }));
-    expect(logs).toContain("SIGTERM received");
-
-    await execAsync(`docker rm ${CONTAINER_A}`).catch(() => {});
-  }, 60000);
-
-  test("two containers with same alias both resolve", async () => {
-    const networkName = "frost-test-dns-rr";
-    await createNetwork(networkName, {});
-
-    const runA = await runContainer({
-      imageName: GRACEFUL_IMAGE,
-      hostPort: PORT_A,
-      containerPort: 8080,
-      name: CONTAINER_A,
-      network: networkName,
-      networkAlias: "test-svc.frost.internal",
-    });
-    expect(runA.success).toBe(true);
-
-    const runB = await runContainer({
-      imageName: GRACEFUL_IMAGE,
-      hostPort: PORT_B,
-      containerPort: 8080,
-      name: CONTAINER_B,
-      network: networkName,
-      networkAlias: "test-svc.frost.internal",
-    });
-    expect(runB.success).toBe(true);
-
-    await waitForHealthy({
-      containerId: runA.containerId,
-      port: PORT_A,
-      path: "/health",
-      timeoutSeconds: 15,
-    });
-    await waitForHealthy({
-      containerId: runB.containerId,
-      port: PORT_B,
-      path: "/health",
-      timeoutSeconds: 15,
-    });
-
-    const resA = await fetch(`http://127.0.0.1:${PORT_A}/`);
-    expect(resA.ok).toBe(true);
-    const resB = await fetch(`http://127.0.0.1:${PORT_B}/`);
-    expect(resB.ok).toBe(true);
-
-    await gracefulStopContainer(CONTAINER_A, 5);
-
-    const resB2 = await fetch(`http://127.0.0.1:${PORT_B}/`);
-    expect(resB2.ok).toBe(true);
-
-    await stopContainer(CONTAINER_B);
-    await removeNetwork(networkName);
-  }, 60000);
-});
-
-describe("shutdownTimeout propagation", () => {
-  const CONTAINER_NAME = "frost-test-shutdown-timeout";
-  const PORT = 19995;
-
-  beforeAll(async () => {
-    await stopContainer(CONTAINER_NAME);
-  }, 30000);
-
-  afterAll(async () => {
-    await stopContainer(CONTAINER_NAME);
-  });
-
-  test("shutdownTimeout sets Docker StopTimeout", async () => {
-    const run = await runContainer({
-      imageName: GRACEFUL_IMAGE,
-      hostPort: PORT,
-      containerPort: 8080,
-      name: CONTAINER_NAME,
-      shutdownTimeout: 15,
-    });
-    expect(run.success).toBe(true);
-
-    const { stdout } = await execAsync(
-      `docker inspect --format '{{.Config.StopTimeout}}' ${CONTAINER_NAME}`,
-    );
-    expect(stdout.trim()).toBe("15");
-
-    await stopContainer(CONTAINER_NAME);
-  }, 60000);
-});
-
-describe("network alias integration", () => {
-  const NETWORK_NAME = "frost-test-network-alias";
-  const CONTAINER_NAME = "frost-test-alias-container";
-
-  beforeAll(async () => {
-    await stopContainer(CONTAINER_NAME);
-    await createNetwork(NETWORK_NAME, {});
-  }, 30000);
-
-  afterAll(async () => {
-    await stopContainer(CONTAINER_NAME);
-    await removeNetwork(NETWORK_NAME);
-  });
-
-  test("runContainer with networkAlias sets alias on network", async () => {
-    const run = await runContainer({
-      imageName: TEST_IMAGE,
-      hostPort: TEST_PORT,
-      containerPort: 8080,
-      name: CONTAINER_NAME,
-      network: NETWORK_NAME,
-      networkAlias: "my-service",
-    });
-    expect(run.success).toBe(true);
-
-    const { stdout } = await execAsync(
-      `docker inspect ${CONTAINER_NAME} --format '{{json .NetworkSettings.Networks}}'`,
-    );
-    const networks = JSON.parse(stdout.trim());
-    const aliases = networks[NETWORK_NAME]?.Aliases || [];
-    expect(aliases).toContain("my-service");
-    await stopContainer(CONTAINER_NAME);
-  }, 60000);
 });

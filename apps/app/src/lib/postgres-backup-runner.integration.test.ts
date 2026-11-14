@@ -1,9 +1,8 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { exec } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { db } from "./db";
-import { runMigrations } from "./migrate";
 import { updatePostgresBackupConfig } from "./postgres-backup-config";
 import {
   listPostgresBackups,
@@ -97,10 +96,6 @@ describe.skipIf(s3Server === null || !postgresReady)(
   "postgres backup runner integration",
   () => {
     const server = s3Server as NonNullable<typeof s3Server>;
-
-    beforeAll(() => {
-      runMigrations();
-    });
 
     afterAll(async () => {
       await server.stop();

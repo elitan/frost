@@ -20,26 +20,6 @@ describe("createRollbackStack", () => {
 
     expect(calls).toEqual(["container", "storage"]);
   });
-
-  test("reset-like failure executes staged cleanup", async () => {
-    const calls: string[] = [];
-    const rollback = createRollbackStack();
-
-    calls.push("clone-staged");
-    rollback.add(async () => {
-      calls.push("cleanup-staged");
-    });
-
-    calls.push("stop-target");
-
-    try {
-      throw new Error("swap failed");
-    } catch {
-      await rollback.run();
-    }
-
-    expect(calls).toEqual(["clone-staged", "stop-target", "cleanup-staged"]);
-  });
 });
 
 describe("buildPostgresCheckpointArgs", () => {

@@ -5,9 +5,6 @@ import {
   IN_PROGRESS_DEPLOYMENT_STATUSES,
   transitionDeploymentStatus,
 } from "./deployment-status";
-import { runMigrations } from "./migrate";
-
-runMigrations();
 
 const suffix = nanoid(8);
 const projectId = `proj-deploy-status-${suffix}`;

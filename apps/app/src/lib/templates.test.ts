@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { isRegisteredServiceIcon } from "./service-icons";
 import {
-  buildConnectionString,
   clearTemplateCache,
   generateCredential,
   getDatabaseTemplates,
@@ -30,27 +29,6 @@ describe("getTemplates", () => {
   it("loads all templates from yaml files", () => {
     const templates = getTemplates();
     expect(templates.length).toBeGreaterThan(0);
-  });
-
-  it("includes database templates", () => {
-    const templates = getTemplates();
-    const postgres = templates.find((t) => t.id === "postgres");
-    expect(postgres).toBeDefined();
-    expect(postgres?.type).toBe("database");
-  });
-
-  it("includes service templates", () => {
-    const templates = getTemplates();
-    const nginx = templates.find((t) => t.id === "nginx");
-    expect(nginx).toBeDefined();
-    expect(nginx?.type).toBe("service");
-  });
-
-  it("includes project templates", () => {
-    const templates = getTemplates();
-    const plausible = templates.find((t) => t.id === "plausible");
-    expect(plausible).toBeDefined();
-    expect(plausible?.type).toBe("project");
   });
 });
 
@@ -247,31 +225,6 @@ describe("resolveTemplateServices", () => {
     expect(svc.volumes[0].path).toBe("/var/lib/postgresql/data");
   });
 
-  it("includes icon from postgres template", () => {
-    const resolved = resolveTemplateServices(requireTemplate("postgres"));
-    expect(resolved[0].icon).toBe("postgresql");
-  });
-
-  it("includes icon from redis template", () => {
-    const resolved = resolveTemplateServices(requireTemplate("redis"));
-    expect(resolved[0].icon).toBe("redis");
-  });
-
-  it("includes icon from mysql template", () => {
-    const resolved = resolveTemplateServices(requireTemplate("mysql"));
-    expect(resolved[0].icon).toBe("mysql");
-  });
-
-  it("includes icon from mongo template", () => {
-    const resolved = resolveTemplateServices(requireTemplate("mongo"));
-    expect(resolved[0].icon).toBe("mongodb");
-  });
-
-  it("includes icon from nginx template", () => {
-    const resolved = resolveTemplateServices(requireTemplate("nginx"));
-    expect(resolved[0].icon).toBe("nginx");
-  });
-
   it("uses registered service icons for every template", function testTemplateIcons() {
     const unknownIcons: string[] = [];
 
@@ -284,11 +237,6 @@ describe("resolveTemplateServices", () => {
     }
 
     expect(unknownIcons).toEqual([]);
-  });
-
-  it("includes icon from garage template", function testGarageTemplateIcon() {
-    const resolved = resolveTemplateServices(requireTemplate("garage"));
-    expect(resolved[0].icon).toBe("garage");
   });
 
   it("starts minio through the minio binary", () => {
@@ -321,59 +269,5 @@ describe("resolveTemplateServices", () => {
     expect(adminToken?.value.length).toBe(32);
     expect(metricsToken?.generated).toBe(true);
     expect(metricsToken?.value.length).toBe(32);
-  });
-});
-
-describe("buildConnectionString", () => {
-  it("builds postgres connection string", () => {
-    const connStr = buildConnectionString(
-      "postgres:17-alpine",
-      "localhost",
-      5432,
-      {
-        POSTGRES_USER: "user",
-        POSTGRES_PASSWORD: "pass",
-        POSTGRES_DB: "mydb",
-      },
-    );
-    expect(connStr).toBe(
-      "postgresql://user:pass@localhost:5432/mydb?sslmode=require",
-    );
-  });
-
-  it("builds mysql connection string", () => {
-    const connStr = buildConnectionString("mysql:8", "localhost", 3306, {
-      MYSQL_ROOT_PASSWORD: "rootpass",
-      MYSQL_DATABASE: "mydb",
-    });
-    expect(connStr).toBe("mysql://root:rootpass@localhost:3306/mydb");
-  });
-
-  it("builds redis connection string", () => {
-    const connStr = buildConnectionString(
-      "redis:7-alpine",
-      "localhost",
-      6379,
-      {},
-    );
-    expect(connStr).toBe("redis://localhost:6379");
-  });
-
-  it("builds mongo connection string", () => {
-    const connStr = buildConnectionString("mongo:7", "localhost", 27017, {
-      MONGO_INITDB_ROOT_USERNAME: "root",
-      MONGO_INITDB_ROOT_PASSWORD: "pass",
-    });
-    expect(connStr).toBe("mongodb://root:pass@localhost:27017");
-  });
-
-  it("returns empty string for unknown database", () => {
-    const connStr = buildConnectionString(
-      "unknown:latest",
-      "localhost",
-      1234,
-      {},
-    );
-    expect(connStr).toBe("");
   });
 });

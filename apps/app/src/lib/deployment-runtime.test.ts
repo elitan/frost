@@ -13,9 +13,6 @@ import {
   getDeployTimeoutError,
   getDeployTimeoutMs,
 } from "./deployment-timeout";
-import { runMigrations } from "./migrate";
-
-runMigrations();
 
 interface TestFixture {
   projectId: string;

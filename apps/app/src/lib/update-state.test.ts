@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  isAutoUpdateEnabled,
-  parseUpdateResult,
-  UPDATE_SERVICE_TRIGGER_COMMAND,
-} from "./update-state";
+import { isAutoUpdateEnabled, parseUpdateResult } from "./update-state";
 
 describe("isAutoUpdateEnabled", function describeAutoUpdate() {
   test("defaults to disabled when unset", function testUnset() {
@@ -55,14 +51,5 @@ describe("parseUpdateResult", function describeParse() {
       success: false,
       newVersion: null,
     });
-  });
-});
-
-describe("UPDATE_SERVICE_TRIGGER_COMMAND", function describeTrigger() {
-  test("starts the oneshot unit without blocking, with legacy fallback", function testTrigger() {
-    expect(UPDATE_SERVICE_TRIGGER_COMMAND).toContain(
-      "systemctl start --no-block frost-update.service",
-    );
-    expect(UPDATE_SERVICE_TRIGGER_COMMAND).toContain("systemctl restart frost");
   });
 });

@@ -3,7 +3,6 @@ import type { ListObjectsV2CommandOutput } from "@aws-sdk/client-s3";
 import { nanoid } from "nanoid";
 import { encrypt } from "./crypto";
 import { db } from "./db";
-import { runMigrations } from "./migrate";
 import {
   buildObjectStorageConnectionSnippets,
   getGaragePermissions,
@@ -16,8 +15,6 @@ import {
   setObjectStorageRuntimeForTests,
   waitForObjectStorageDeploymentContainer,
 } from "./object-storage";
-
-runMigrations();
 
 interface DeploymentFixture {
   projectId: string;

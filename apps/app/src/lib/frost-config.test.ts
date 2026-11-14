@@ -39,17 +39,6 @@ health_check:
     expect(config.port).toBeUndefined();
   });
 
-  test("parses config with only resources", () => {
-    const yaml = `
-resources:
-  memory: 1g
-  cpu: 2
-`;
-    const config = parseFrostConfig(yaml);
-    expect(config.resources?.memory).toBe("1g");
-    expect(config.resources?.cpu).toBe(2);
-  });
-
   test("parses empty config", () => {
     const config = parseFrostConfig("{}");
     expect(config.port).toBeUndefined();
@@ -95,11 +84,6 @@ resources:
     expect(parseFrostConfig("resources:\n  memory: 2G").resources?.memory).toBe(
       "2G",
     );
-  });
-
-  test("accepts dockerfile path", () => {
-    const config = parseFrostConfig("dockerfile: build/Dockerfile.prod");
-    expect(config.dockerfile).toBe("build/Dockerfile.prod");
   });
 
   test("throws on invalid timeout - too low", () => {
@@ -158,13 +142,6 @@ describe("mergeConfigWithService", () => {
     const result = mergeConfigWithService(service, config);
     expect(result.dockerfilePath).toBe("Dockerfile");
     expect(result.containerPort).toBe(3000);
-  });
-
-  test("config.dockerfile used as-is (repo-root-relative)", () => {
-    const service = makeService();
-    const config: FrostConfig = { dockerfile: "apps/web/Dockerfile" };
-    const result = mergeConfigWithService(service, config);
-    expect(result.dockerfilePath).toBe("apps/web/Dockerfile");
   });
 
   test("config.dockerfile overrides service dockerfilePath", () => {

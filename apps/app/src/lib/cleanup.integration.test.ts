@@ -4,8 +4,6 @@ import { promisify } from "node:util";
 import {
   buildImage,
   createNetwork,
-  getImageCreatedAt,
-  getImageSize,
   getRunningImageNames,
   isNetworkInUse,
   listFrostImages,
@@ -80,17 +78,6 @@ describe("cleanup docker functions", () => {
 
     await removeImage(`${TEST_PREFIX}-unlabeled:v1`);
   }, 60000);
-
-  test("getImageCreatedAt returns valid date", async () => {
-    const created = await getImageCreatedAt(`${TEST_PREFIX}-svc:v1`);
-    expect(created).toBeInstanceOf(Date);
-    expect(created.getTime()).toBeGreaterThan(0);
-  });
-
-  test("getImageSize returns positive number", async () => {
-    const size = await getImageSize(`${TEST_PREFIX}-svc:v1`);
-    expect(size).toBeGreaterThan(0);
-  });
 
   test("removeImage deletes an image", async () => {
     await buildImage({

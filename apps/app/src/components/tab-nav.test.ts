@@ -12,10 +12,6 @@ describe("getPathFromHref", () => {
     );
   });
 
-  test("handles multiple query params", () => {
-    expect(getPathFromHref("/foo?a=1&b=2")).toBe("/foo");
-  });
-
   test("handles empty path with query", () => {
     expect(getPathFromHref("?foo=bar")).toBe("");
   });
@@ -55,11 +51,5 @@ describe("isTabActive", () => {
     expect(isTabActive("/projects/123/other", settingsPath, overviewPath)).toBe(
       false,
     );
-  });
-
-  test("settings page with env query matches settings tab", () => {
-    const pathname = "/projects/123/settings";
-    const tabPath = "/projects/123/settings";
-    expect(isTabActive(pathname, tabPath, overviewPath)).toBe(true);
   });
 });

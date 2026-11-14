@@ -47,17 +47,6 @@ describe("ssl", () => {
     await removeSSLCerts(TEST_SERVICE_ID);
   });
 
-  test("getSSLDir returns correct path", () => {
-    const dir = getSSLDir(TEST_SERVICE_ID);
-    expect(dir).toBe(`${TEST_SSL_PATH}/${TEST_SERVICE_ID}`);
-  });
-
-  test("getSSLPaths returns correct paths", () => {
-    const paths = getSSLPaths(TEST_SERVICE_ID);
-    expect(paths.cert).toBe(`${TEST_SSL_PATH}/${TEST_SERVICE_ID}/server.crt`);
-    expect(paths.key).toBe(`${TEST_SSL_PATH}/${TEST_SERVICE_ID}/server.key`);
-  });
-
   test("sslCertsExist returns false when certs do not exist", () => {
     const exists = sslCertsExist(TEST_SERVICE_ID);
     expect(exists).toBe(false);

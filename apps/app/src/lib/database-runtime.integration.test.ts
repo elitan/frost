@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { exec } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -10,7 +10,6 @@ import {
   getDatabaseTargetConnectionInfo,
 } from "./database-runtime";
 import { db } from "./db";
-import { runMigrations } from "./migrate";
 import { shellEscape } from "./shell-escape";
 import { getSSLDir } from "./ssl";
 
@@ -37,10 +36,6 @@ async function runTargetSql(input: {
 }
 
 describe("database runtime integration", () => {
-  beforeAll(async () => {
-    runMigrations();
-  });
-
   test("creates postgres targets with tls and stable database names", async () => {
     const projectId = randomUUID();
     const projectName = `runtime-test-${projectId.slice(0, 8)}`;

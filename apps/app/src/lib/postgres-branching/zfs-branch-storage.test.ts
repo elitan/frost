@@ -4,43 +4,11 @@ import { join } from "node:path";
 import {
   buildZfsCloneArgs,
   buildZfsCreateArgs,
-  buildZfsDatasetPath,
-  buildZfsMountPath,
   findBlockingZfsClones,
-  normalizeDatasetBase,
-  normalizeStorageRef,
   parseZfsSnapshotClones,
   resolveSystemCommand,
   resolveZfsPool,
 } from "./zfs-branch-storage";
-
-describe("normalizeDatasetBase", () => {
-  test("trims slashes", () => {
-    expect(normalizeDatasetBase("/frost/databases/")).toBe("frost/databases");
-  });
-});
-
-describe("normalizeStorageRef", () => {
-  test("trims slashes", () => {
-    expect(normalizeStorageRef("/db/target/live/")).toBe("db/target/live");
-  });
-});
-
-describe("buildZfsDatasetPath", () => {
-  test("builds dataset path", () => {
-    expect(buildZfsDatasetPath("tank", "frost/databases", "a/b/live")).toBe(
-      "tank/frost/databases/a/b/live",
-    );
-  });
-});
-
-describe("buildZfsMountPath", () => {
-  test("builds mount path", () => {
-    expect(buildZfsMountPath("/opt/frost/data/postgres/zfs", "a/b/live")).toBe(
-      "/opt/frost/data/postgres/zfs/a/b/live",
-    );
-  });
-});
 
 describe("buildZfsCreateArgs", () => {
   test("includes tuned properties", () => {

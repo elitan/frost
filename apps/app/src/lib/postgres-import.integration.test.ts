@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { deleteDatabase } from "./database-runtime";
 import { db } from "./db";
-import { runMigrations } from "./migrate";
 import {
   createDatabaseImportJob,
   getDatabaseImportJob,
@@ -108,7 +107,6 @@ async function waitForImportJobStage(input: {
 
 describe("postgres import integration", () => {
   beforeAll(async function setup() {
-    runMigrations();
     sourcePort = await startSourcePostgres();
     await waitForSourceReady();
   }, 180000);

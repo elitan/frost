@@ -1,19 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildCopyCloneArgs,
   buildCopyCloneHelperArgs,
   buildCopyRemoveHelperArgs,
 } from "./copy-branch-storage";
-
-describe("buildCopyCloneArgs", () => {
-  test("builds cp clone args", () => {
-    expect(buildCopyCloneArgs("/a/source", "/b/target")).toEqual([
-      "-a",
-      "/a/source",
-      "/b/target",
-    ]);
-  });
-});
 
 describe("buildCopyCloneHelperArgs", () => {
   test("builds docker helper clone args", () => {

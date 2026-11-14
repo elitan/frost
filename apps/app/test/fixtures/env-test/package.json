@@ -1,8 +1,0 @@
-{
-  "name": "env-test",
-  "version": "1.0.0",
-  "scripts": {
-    "build": "node build.js",
-    "start": "node index.js"
-  }
-}

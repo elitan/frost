@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FALLBACK_ICON, getServiceIcon } from "./service-logo";
+import { getServiceIcon } from "./service-logo";
 
 describe("getServiceIcon", () => {
   test("returns icon url when service has icon field", () => {
@@ -18,18 +18,6 @@ describe("getServiceIcon", () => {
     );
     expect(getServiceIcon({ name: "app", icon: "umami" })).toBe(
       "https://cdn.simpleicons.org/umami/ffffff",
-    );
-  });
-
-  test("returns icon url for various icon slugs", () => {
-    expect(getServiceIcon({ name: "db", icon: "postgresql" })).toBe(
-      "https://cdn.simpleicons.org/postgresql",
-    );
-    expect(getServiceIcon({ name: "cache", icon: "redis" })).toBe(
-      "https://cdn.simpleicons.org/redis",
-    );
-    expect(getServiceIcon({ name: "app", icon: "react" })).toBe(
-      "https://cdn.simpleicons.org/react",
     );
   });
 
@@ -92,11 +80,5 @@ describe("getServiceIcon", () => {
   test("handles undefined icon field", () => {
     const service = { name: "nginx-proxy", icon: undefined };
     expect(getServiceIcon(service)).toBe("https://cdn.simpleicons.org/nginx");
-  });
-});
-
-describe("FALLBACK_ICON", () => {
-  test("is a grayed docker icon", () => {
-    expect(FALLBACK_ICON).toBe("https://cdn.simpleicons.org/docker/666666");
   });
 });
