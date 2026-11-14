@@ -154,7 +154,6 @@ jobs:
 
   # Full e2e on GitHub-hosted runners (free for public repos). The harness
   # treats the runner as the "server" and reaches it over SSH on 127.0.0.1.
-  # Real Hetzner servers are only used by e2e-upgrade below.
   e2e-runner:
     needs: [build]
     timeout-minutes: 40
