@@ -10,6 +10,7 @@ import {
   useService,
   useUpdateService,
 } from "@/hooks/use-services";
+import { copyText } from "@/lib/utils";
 
 interface HostnameCardProps {
   serviceId: string;
@@ -108,11 +109,16 @@ export function HostnameCard({ serviceId }: HostnameCardProps) {
             variant="ghost"
             size="icon"
             className="h-6 w-6 text-neutral-500 hover:text-neutral-300"
-            onClick={() => {
-              navigator.clipboard.writeText(
+            aria-label="Copy internal address"
+            onClick={async () => {
+              const ok = await copyText(
                 `${hostname}${SUFFIX}:${service.containerPort ?? 8080}`,
               );
-              toast.success("Copied to clipboard");
+              if (ok) {
+                toast.success("Copied to clipboard");
+              } else {
+                toast.error("Failed to copy to clipboard");
+              }
             }}
           >
             <Copy className="h-3.5 w-3.5" />

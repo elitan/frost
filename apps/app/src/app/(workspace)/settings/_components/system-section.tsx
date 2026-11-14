@@ -10,7 +10,7 @@ import {
   RefreshCw,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DemoModeAlert } from "@/components/demo-mode-alert";
 import { SettingCard } from "@/components/setting-card";
@@ -30,6 +30,20 @@ export function SystemSection() {
   const [showLog, setShowLog] = useState(false);
   const [error, setError] = useState("");
   const [showApplyDialog, setShowApplyDialog] = useState(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  const previousVersionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const { data: status } = useQuery(orpc.updates.get.queryOptions());
 
@@ -74,11 +88,35 @@ export function SystemSection() {
     orpc.updates.clearResult.mutationOptions(),
   );
 
-  async function pollForRestart() {
+  function stopPolling() {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }
+
+  function pollForRestart() {
+    stopPolling();
     const startTime = Date.now();
     const maxDuration = 120000;
+    const expectedPreviousVersion = previousVersionRef.current;
+
+    const schedule = () => {
+      if (!mountedRef.current) return;
+      pollTimerRef.current = setTimeout(poll, 2000);
+    };
+
+    const markSuccess = async () => {
+      setUpdateState("success");
+      await queryClient.refetchQueries({
+        queryKey: orpc.updates.get.key(),
+      });
+    };
 
     const poll = async () => {
+      pollTimerRef.current = null;
+      if (!mountedRef.current) return;
+
       if (Date.now() - startTime > maxDuration) {
         setUpdateState("failed");
         setError("Server did not respond after 2 minutes");
@@ -86,30 +124,38 @@ export function SystemSection() {
       }
 
       try {
-        await refetchHealth();
+        const healthRes = await refetchHealth();
         const resultRes = await refetchResult();
-        const result = resultRes.data;
+        if (!mountedRef.current) return;
+
+        const result = resultRes.isError ? undefined : resultRes.data;
 
         if (result?.completed && result.success) {
-          setUpdateState("success");
-          await queryClient.refetchQueries({
-            queryKey: orpc.updates.get.key(),
-          });
-        } else if (result?.completed && !result.success) {
+          await markSuccess();
+          return;
+        }
+        if (result?.completed && !result.success) {
           setUpdateState("failed");
           setShowLog(true);
-        } else {
-          setUpdateState("success");
-          await queryClient.refetchQueries({
-            queryKey: orpc.updates.get.key(),
-          });
+          return;
         }
-      } catch {
-        setTimeout(poll, 2000);
-      }
+
+        const health = healthRes.isError ? undefined : healthRes.data;
+        if (
+          health?.ok &&
+          health.version &&
+          expectedPreviousVersion &&
+          health.version !== expectedPreviousVersion
+        ) {
+          await markSuccess();
+          return;
+        }
+      } catch {}
+
+      schedule();
     };
 
-    setTimeout(poll, 2000);
+    schedule();
   }
 
   async function handleCheck() {
@@ -120,6 +166,7 @@ export function SystemSection() {
   function handleApply() {
     if (demoMode) return;
     setPreviousVersion(status?.currentVersion || null);
+    previousVersionRef.current = status?.currentVersion || null;
     setUpdateState("preparing");
     setError("");
     setShowLog(false);

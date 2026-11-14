@@ -35,12 +35,19 @@ export function ConfirmDialog({
   onConfirm,
 }: ConfirmDialogProps) {
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (open) {
-      setTimeout(() => confirmButtonRef.current?.focus(), 0);
-    }
-  }, [open]);
+    if (!open) return;
+    const timer = setTimeout(() => {
+      if (variant === "destructive") {
+        cancelButtonRef.current?.focus();
+      } else {
+        confirmButtonRef.current?.focus();
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [open, variant]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -50,7 +57,11 @@ export function ConfirmDialog({
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <div className="flex justify-end gap-2 pt-4">
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button
+            ref={cancelButtonRef}
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+          >
             {cancelLabel}
           </Button>
           <Button

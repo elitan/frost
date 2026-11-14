@@ -99,6 +99,7 @@ export function BucketFilesTab({
             void bucketObjectsQuery.refetch();
           }}
           title="Refresh files"
+          aria-label="Refresh files"
         >
           {bucketObjectsQuery.isFetching ? (
             <Loader2 className="h-4 w-4 animate-spin" />

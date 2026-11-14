@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Copy, Loader2, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DemoModeAlert } from "@/components/demo-mode-alert";
 import { SettingCard } from "@/components/setting-card";
@@ -11,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { useDemoMode } from "@/hooks/use-demo-mode";
 import { orpc } from "@/lib/orpc-client";
 import { formatDateTime } from "@/lib/time";
+import { copyText } from "@/lib/utils";
 
 export function ApiKeysSection() {
   const demoMode = useDemoMode();
@@ -65,7 +67,10 @@ export function ApiKeysSection() {
   }
 
   async function handleCopy(text: string) {
-    await navigator.clipboard.writeText(text);
+    if (!(await copyText(text))) {
+      toast.error("Failed to copy to clipboard");
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }

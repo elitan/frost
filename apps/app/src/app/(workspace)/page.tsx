@@ -1,6 +1,13 @@
 "use client";
 
-import { LayoutGrid, List, Plus, Rocket, Search } from "lucide-react";
+import {
+  AlertTriangle,
+  LayoutGrid,
+  List,
+  Plus,
+  Rocket,
+  Search,
+} from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { EmptyState } from "@/components/empty-state";
@@ -79,7 +86,7 @@ function ProjectListLoading() {
 }
 
 export default function Home() {
-  const { data: projects, isLoading } = useProjects();
+  const { data: projects, isLoading, isError, refetch } = useProjects();
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<ProjectViewMode>("cards");
 
@@ -105,6 +112,21 @@ export default function Home() {
         <ProjectCardsLoading />
       ) : (
         <ProjectListLoading />
+      );
+    }
+
+    if (isError && !projects) {
+      return (
+        <EmptyState
+          icon={AlertTriangle}
+          title="Failed to load projects"
+          description="Something went wrong while loading your projects"
+          action={
+            <Button size="sm" variant="outline" onClick={() => refetch()}>
+              Try again
+            </Button>
+          }
+        />
       );
     }
 

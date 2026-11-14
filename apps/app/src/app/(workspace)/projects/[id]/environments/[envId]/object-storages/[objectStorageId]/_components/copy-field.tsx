@@ -3,11 +3,15 @@
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { copyText } from "@/lib/utils";
 
 export function CopyButton({ value }: { value: string }) {
   async function handleCopy() {
-    await navigator.clipboard.writeText(value);
-    toast.success("Copied");
+    if (await copyText(value)) {
+      toast.success("Copied");
+    } else {
+      toast.error("Failed to copy");
+    }
   }
 
   return (
@@ -18,6 +22,7 @@ export function CopyButton({ value }: { value: string }) {
       className="h-7 w-7"
       onClick={handleCopy}
       title="Copy"
+      aria-label="Copy"
     >
       <Copy className="h-3.5 w-3.5" />
     </Button>

@@ -24,6 +24,7 @@ import { buildConnectionString } from "@/lib/connection-strings";
 import { getCurrentDeployment } from "@/lib/deployment-utils";
 import { getPreferredDomain } from "@/lib/service-url";
 import { getTimeAgo } from "@/lib/time";
+import { copyText } from "@/lib/utils";
 import { RuntimeMetricsCard } from "./runtime-metrics-card";
 
 function getGitHubRepoFromUrl(url: string | null): string | null {
@@ -60,9 +61,13 @@ function InternalConnectionString({ service }: { service: Service }) {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => {
-            navigator.clipboard.writeText(connStr);
-            toast.success("Copied to clipboard");
+          aria-label="Copy connection string"
+          onClick={async () => {
+            if (await copyText(connStr)) {
+              toast.success("Copied to clipboard");
+            } else {
+              toast.error("Failed to copy to clipboard");
+            }
           }}
         >
           <Copy className="h-4 w-4" />

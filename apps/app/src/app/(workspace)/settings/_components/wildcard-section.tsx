@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DemoModeAlert } from "@/components/demo-mode-alert";
 import { SettingCard } from "@/components/setting-card";
 import { StatusNotice } from "@/components/status-notice";
@@ -23,6 +24,7 @@ import {
   normalizeDomainName,
 } from "@/lib/domain-validation";
 import { orpc } from "@/lib/orpc-client";
+import { copyText } from "@/lib/utils";
 
 export function WildcardSection() {
   const demoMode = useDemoMode();
@@ -33,6 +35,7 @@ export function WildcardSection() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
+  const [showRemoveDialog, setShowRemoveDialog] = useState(false);
   const domainError = getDomainNameValidationError(domain);
 
   const { data: config } = useQuery(orpc.settings.wildcard.get.queryOptions());
@@ -96,6 +99,7 @@ export function WildcardSection() {
             duration: 10000,
           });
         }
+        setShowRemoveDialog(false);
         setDomain("");
         setApiToken("");
         setTokenValid(null);
@@ -104,6 +108,7 @@ export function WildcardSection() {
         });
       },
       onError: (err) => {
+        setShowRemoveDialog(false);
         setError(
           err instanceof Error ? err.message : "Failed to remove settings",
         );
@@ -145,214 +150,249 @@ export function WildcardSection() {
   const saving = saveMutation.isPending || removeMutation.isPending;
 
   return (
-    <SettingCard
-      title="Wildcard Domain"
-      description="Auto-generate subdomains for services with wildcard SSL. Requires DNS provider API access for certificate verification."
-      learnMoreUrl="https://caddyserver.com/docs/automatic-https#dns-challenge"
-      learnMoreText="Learn more about DNS-01 challenge"
-      onSubmit={config?.configured ? undefined : handleSave}
-      footer={
-        config?.configured ? (
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={handleRemove}
-            disabled={demoMode || saving}
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Remove"}
-          </Button>
-        ) : (
-          <Button
-            type="submit"
-            disabled={
-              demoMode || !domain || Boolean(domainError) || !apiToken || saving
-            }
-          >
-            {saving ? (
-              <>
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              "Save"
-            )}
-          </Button>
-        )
-      }
-    >
-      <div className="space-y-4">
-        {demoMode && (
-          <DemoModeAlert text="Wildcard settings are locked in demo mode." />
-        )}
-
-        {config?.configured && config.wildcardDomain && (
-          <StatusNotice
-            tone="success"
-            icon={<CheckCircle2 className="h-5 w-5" />}
-          >
-            <span>
-              Wildcard configured for <strong>*.{config.wildcardDomain}</strong>
-            </span>
-          </StatusNotice>
-        )}
-
-        {success && (
-          <StatusNotice tone="success">
-            Wildcard domain configured successfully! New services will
-            automatically get subdomains.
-          </StatusNotice>
-        )}
-
-        {settings?.serverIp && (
-          <div className="flex items-center gap-2 rounded-md bg-neutral-800/50 p-3">
-            <span className="text-sm text-neutral-400">Your server IP:</span>
-            <code className="text-sm font-mono text-neutral-200">
-              {settings.serverIp}
-            </code>
+    <>
+      <SettingCard
+        title="Wildcard Domain"
+        description="Auto-generate subdomains for services with wildcard SSL. Requires DNS provider API access for certificate verification."
+        learnMoreUrl="https://caddyserver.com/docs/automatic-https#dns-challenge"
+        learnMoreText="Learn more about DNS-01 challenge"
+        onSubmit={config?.configured ? undefined : handleSave}
+        footer={
+          config?.configured ? (
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="h-6 w-6 p-0"
-              onClick={() => {
-                navigator.clipboard.writeText(settings.serverIp);
-                toast.success("Copied to clipboard");
-              }}
+              variant="destructive"
+              onClick={() => setShowRemoveDialog(true)}
+              disabled={demoMode || saving}
             >
-              <Copy className="h-3.5 w-3.5" />
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Remove"}
             </Button>
-          </div>
-        )}
+          ) : (
+            <Button
+              type="submit"
+              disabled={
+                demoMode ||
+                !domain ||
+                Boolean(domainError) ||
+                !apiToken ||
+                saving
+              }
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save"
+              )}
+            </Button>
+          )
+        }
+      >
+        <div className="space-y-4">
+          {demoMode && (
+            <DemoModeAlert text="Wildcard settings are locked in demo mode." />
+          )}
 
-        <div className="grid gap-2">
-          <Label htmlFor="wildcard-domain" className="text-sm text-neutral-400">
-            Wildcard Domain
-          </Label>
-          <Input
-            id="wildcard-domain"
-            value={domain}
-            onChange={(e) => setDomain(e.target.value.replace(/^\*\./, ""))}
-            placeholder="apps.example.com"
-            aria-invalid={Boolean(domainError)}
-            disabled={demoMode || Boolean(config?.configured)}
-            className="h-10 border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
-          />
-          {domainError && <p className="text-sm text-red-400">{domainError}</p>}
-          <p className="text-xs text-neutral-500">
-            Services get subdomains like: api-myproject.
-            {domain || "apps.example.com"}
-          </p>
-        </div>
+          {config?.configured && config.wildcardDomain && (
+            <StatusNotice
+              tone="success"
+              icon={<CheckCircle2 className="h-5 w-5" />}
+            >
+              <span>
+                Wildcard configured for{" "}
+                <strong>*.{config.wildcardDomain}</strong>
+              </span>
+            </StatusNotice>
+          )}
 
-        <div className="grid gap-2">
-          <Label htmlFor="dns-provider" className="text-sm text-neutral-400">
-            DNS Provider
-          </Label>
-          <Input
-            id="dns-provider"
-            value="Cloudflare"
-            disabled
-            className="h-10 border-neutral-800 bg-neutral-800 text-neutral-400"
-          />
-          <p className="text-xs text-neutral-500">More providers coming soon</p>
-        </div>
+          {success && (
+            <StatusNotice tone="success">
+              Wildcard domain configured successfully! New services will
+              automatically get subdomains.
+            </StatusNotice>
+          )}
 
-        {!config?.configured && (
-          <div className="grid gap-2">
-            <Label htmlFor="api-token" className="text-sm text-neutral-400">
-              Cloudflare API Token
-            </Label>
-            <div className="flex gap-2">
-              <Input
-                id="api-token"
-                type="password"
-                value={apiToken}
-                onChange={(e) => {
-                  setApiToken(e.target.value);
-                  setTokenValid(null);
-                }}
-                disabled={demoMode}
-                placeholder="Enter your Cloudflare API token"
-                className="h-10 border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
-              />
+          {settings?.serverIp && (
+            <div className="flex items-center gap-2 rounded-md bg-neutral-800/50 p-3">
+              <span className="text-sm text-neutral-400">Your server IP:</span>
+              <code className="text-sm font-mono text-neutral-200">
+                {settings.serverIp}
+              </code>
               <Button
                 type="button"
-                variant="secondary"
-                onClick={handleTestToken}
-                disabled={demoMode || !apiToken || testing}
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0"
+                aria-label="Copy server IP"
+                onClick={async () => {
+                  if (await copyText(settings.serverIp)) {
+                    toast.success("Copied to clipboard");
+                  } else {
+                    toast.error("Failed to copy to clipboard");
+                  }
+                }}
               >
-                {testing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  "Test"
-                )}
+                <Copy className="h-3.5 w-3.5" />
               </Button>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowInstructions(!showInstructions)}
-              className="mt-1 flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+          )}
+
+          <div className="grid gap-2">
+            <Label
+              htmlFor="wildcard-domain"
+              className="text-sm text-neutral-400"
             >
-              {showInstructions ? (
-                <ChevronDown className="h-3.5 w-3.5" />
-              ) : (
-                <ChevronRight className="h-3.5 w-3.5" />
-              )}
-              How to create a Cloudflare token
-            </button>
-
-            {showInstructions && (
-              <div className="mt-2 rounded-md bg-neutral-800/50 p-3 text-xs text-neutral-400">
-                <ol className="list-inside list-decimal space-y-1">
-                  <li>
-                    Go to{" "}
-                    <a
-                      href="https://dash.cloudflare.com/profile/api-tokens"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:underline"
-                    >
-                      Cloudflare API Tokens
-                    </a>
-                  </li>
-                  <li>
-                    Click{" "}
-                    <strong className="text-neutral-300">Create Token</strong>
-                  </li>
-                  <li>
-                    Find{" "}
-                    <strong className="text-neutral-300">Edit zone DNS</strong>{" "}
-                    → Use template
-                  </li>
-                  <li>Zone Resources → select your domain</li>
-                  <li>Create Token → copy it</li>
-                </ol>
-              </div>
+              Wildcard Domain
+            </Label>
+            <Input
+              id="wildcard-domain"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value.replace(/^\*\./, ""))}
+              placeholder="apps.example.com"
+              aria-invalid={Boolean(domainError)}
+              disabled={demoMode || Boolean(config?.configured)}
+              className="h-10 border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
+            />
+            {domainError && (
+              <p className="text-sm text-red-400">{domainError}</p>
             )}
+            <p className="text-xs text-neutral-500">
+              Services get subdomains like: api-myproject.
+              {domain || "apps.example.com"}
+            </p>
           </div>
-        )}
 
-        {tokenValid !== null && (
-          <StatusNotice
-            tone={tokenValid ? "success" : "danger"}
-            icon={
-              tokenValid ? (
-                <CheckCircle2 className="h-4 w-4" />
-              ) : (
-                <XCircle className="h-4 w-4" />
-              )
-            }
-          >
-            <span>
-              {tokenValid
-                ? "API token is valid"
-                : "Invalid or inactive API token"}
-            </span>
-          </StatusNotice>
-        )}
+          <div className="grid gap-2">
+            <Label htmlFor="dns-provider" className="text-sm text-neutral-400">
+              DNS Provider
+            </Label>
+            <Input
+              id="dns-provider"
+              value="Cloudflare"
+              disabled
+              className="h-10 border-neutral-800 bg-neutral-800 text-neutral-400"
+            />
+            <p className="text-xs text-neutral-500">
+              More providers coming soon
+            </p>
+          </div>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
-      </div>
-    </SettingCard>
+          {!config?.configured && (
+            <div className="grid gap-2">
+              <Label htmlFor="api-token" className="text-sm text-neutral-400">
+                Cloudflare API Token
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id="api-token"
+                  type="password"
+                  value={apiToken}
+                  onChange={(e) => {
+                    setApiToken(e.target.value);
+                    setTokenValid(null);
+                  }}
+                  disabled={demoMode}
+                  placeholder="Enter your Cloudflare API token"
+                  className="h-10 border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handleTestToken}
+                  disabled={demoMode || !apiToken || testing}
+                >
+                  {testing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    "Test"
+                  )}
+                </Button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowInstructions(!showInstructions)}
+                className="mt-1 flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+              >
+                {showInstructions ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+                How to create a Cloudflare token
+              </button>
+
+              {showInstructions && (
+                <div className="mt-2 rounded-md bg-neutral-800/50 p-3 text-xs text-neutral-400">
+                  <ol className="list-inside list-decimal space-y-1">
+                    <li>
+                      Go to{" "}
+                      <a
+                        href="https://dash.cloudflare.com/profile/api-tokens"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:underline"
+                      >
+                        Cloudflare API Tokens
+                      </a>
+                    </li>
+                    <li>
+                      Click{" "}
+                      <strong className="text-neutral-300">Create Token</strong>
+                    </li>
+                    <li>
+                      Find{" "}
+                      <strong className="text-neutral-300">
+                        Edit zone DNS
+                      </strong>{" "}
+                      → Use template
+                    </li>
+                    <li>Zone Resources → select your domain</li>
+                    <li>Create Token → copy it</li>
+                  </ol>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tokenValid !== null && (
+            <StatusNotice
+              tone={tokenValid ? "success" : "danger"}
+              icon={
+                tokenValid ? (
+                  <CheckCircle2 className="h-4 w-4" />
+                ) : (
+                  <XCircle className="h-4 w-4" />
+                )
+              }
+            >
+              <span>
+                {tokenValid
+                  ? "API token is valid"
+                  : "Invalid or inactive API token"}
+              </span>
+            </StatusNotice>
+          )}
+
+          {error && <p className="text-sm text-red-400">{error}</p>}
+        </div>
+      </SettingCard>
+      <ConfirmDialog
+        open={showRemoveDialog}
+        onOpenChange={(open) => {
+          if (!open && removeMutation.isPending) return;
+          setShowRemoveDialog(open);
+        }}
+        title="Remove wildcard domain?"
+        description={`This removes the wildcard configuration${
+          config?.wildcardDomain ? ` for *.${config.wildcardDomain}` : ""
+        }. Services will no longer get auto-generated subdomains.`}
+        confirmLabel="Remove"
+        variant="destructive"
+        loading={removeMutation.isPending}
+        onConfirm={handleRemove}
+      />
+    </>
   );
 }

@@ -38,6 +38,7 @@ export function BucketAccessKeysTab({
                 onRevokeKey(accessKey.id);
               }}
               title="Revoke key"
+              aria-label="Revoke key"
             >
               <Trash2 className="h-4 w-4" />
             </Button>

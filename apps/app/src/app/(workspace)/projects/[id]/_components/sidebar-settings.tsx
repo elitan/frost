@@ -119,10 +119,13 @@ function VariablesTab({
     JSON.stringify(envVars) !== JSON.stringify(initialEnvVars.current);
 
   async function handleSave() {
-    const validEnvVars = envVars.filter((v) => v.key.trim() !== "");
+    const validEnvVars = envVars
+      .map((v) => ({ ...v, key: v.key.trim() }))
+      .filter((v) => v.key !== "");
     try {
       await updateMutation.mutateAsync({ envVars: validEnvVars });
       initialEnvVars.current = validEnvVars;
+      setEnvVars(validEnvVars);
       toast.success("Environment variables saved", {
         description: "Redeploy required for changes to take effect",
         duration: 10000,

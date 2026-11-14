@@ -40,7 +40,11 @@ export function useCleanupSettings() {
 
   const { data: runStatusData } = useQuery({
     ...orpc.cleanup.runStatus.queryOptions(),
-    refetchInterval: data?.running ? 2000 : false,
+    refetchInterval: (query) => {
+      const runStatus = query.state.data;
+      if (runStatus) return runStatus.running ? 2000 : false;
+      return data?.running ? 2000 : false;
+    },
   });
 
   const settings: CleanupSettings | null = data
@@ -68,7 +72,12 @@ export function useCleanupSettings() {
   const runMutation = useMutation(
     orpc.cleanup.runStart.mutationOptions({
       onSuccess: async () => {
-        await queryClient.refetchQueries({ queryKey: orpc.cleanup.get.key() });
+        await Promise.all([
+          queryClient.refetchQueries({ queryKey: orpc.cleanup.get.key() }),
+          queryClient.refetchQueries({
+            queryKey: orpc.cleanup.runStatus.key(),
+          }),
+        ]);
       },
     }),
   );

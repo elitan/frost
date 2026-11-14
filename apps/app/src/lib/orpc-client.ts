@@ -1,4 +1,4 @@
-import { createORPCClient } from "@orpc/client";
+import { createORPCClient, ORPCError } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import type { JsonifiedClient } from "@orpc/openapi-client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
@@ -18,3 +18,7 @@ export const client: JsonifiedClient<ContractRouterClient<Contract>> =
   createORPCClient(link);
 
 export const orpc = createORPCReactQueryUtils(client);
+
+export function isUnauthorizedError(error: unknown): boolean {
+  return error instanceof ORPCError && error.status === 401;
+}

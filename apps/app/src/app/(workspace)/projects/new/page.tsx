@@ -97,7 +97,9 @@ export default function NewProjectPage() {
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const validEnvVars = envVars.filter((v) => v.key.trim() !== "");
+    const validEnvVars = envVars
+      .map((v) => ({ ...v, key: v.key.trim() }))
+      .filter((v) => v.key !== "");
 
     const data: CreateProjectInput = {
       name: formData.get("name") as string,

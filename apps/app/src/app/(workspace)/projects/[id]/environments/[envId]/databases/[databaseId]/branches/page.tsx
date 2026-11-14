@@ -437,6 +437,7 @@ export default function DatabaseBranchesPage() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-7 w-7 text-neutral-400 hover:text-neutral-100"
+                                aria-label="Branch actions"
                                 onClick={function onMenuTriggerClick(event) {
                                   event.stopPropagation();
                                 }}

@@ -552,6 +552,7 @@ function TableFieldEditor({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
+                  aria-label="Remove field"
                   onClick={() => onRemoveField?.(field.id)}
                   disabled={disabled || !onRemoveField}
                 >
@@ -1368,6 +1369,7 @@ export function DatabaseTableBrowser({
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
+                    aria-label="Create table"
                     onClick={openCreateTableDialog}
                     disabled={isBusy}
                   >
@@ -1377,6 +1379,7 @@ export function DatabaseTableBrowser({
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7"
+                    aria-label="Refresh tables"
                     onClick={() => {
                       void handleRefresh();
                     }}
@@ -1614,6 +1617,7 @@ export function DatabaseTableBrowser({
                                           variant="ghost"
                                           size="icon"
                                           className="h-7 w-7"
+                                          aria-label="Edit row"
                                           onClick={() => openEditRow(row)}
                                           disabled={isBusy}
                                         >
@@ -1623,6 +1627,7 @@ export function DatabaseTableBrowser({
                                           variant="ghost"
                                           size="icon"
                                           className="h-7 w-7 text-red-300 hover:text-red-200"
+                                          aria-label="Delete row"
                                           onClick={() => {
                                             void handleDeleteRow(row);
                                           }}
@@ -1804,6 +1809,7 @@ export function DatabaseTableBrowser({
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
+                          aria-label="Remove column"
                           onClick={() => handleRemoveCreateColumn(column.id)}
                           disabled={isBusy}
                         >

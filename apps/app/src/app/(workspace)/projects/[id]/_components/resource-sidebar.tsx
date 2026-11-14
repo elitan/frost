@@ -52,6 +52,7 @@ export function ResourceSidebar<T extends string>({
           variant="ghost"
           size="icon"
           className="h-8 w-8"
+          aria-label="Close"
           onClick={onClose}
         >
           <X className="h-4 w-4" />

@@ -383,6 +383,7 @@ export function CreateServiceModal({
   }
 
   async function handleTemplateSelect(templateId: string) {
+    if (createMutation.isPending) return;
     const template = (serviceTemplates ?? []).find(
       (t: Template) => t.id === templateId,
     );
@@ -600,7 +601,10 @@ export function CreateServiceModal({
               </div>
             </div>
 
-            <Select onValueChange={handleTemplateSelect}>
+            <Select
+              onValueChange={handleTemplateSelect}
+              disabled={createMutation.isPending}
+            >
               <SelectTrigger className="border-neutral-700 bg-neutral-800 text-neutral-100">
                 <SelectValue placeholder="Select a template" />
               </SelectTrigger>

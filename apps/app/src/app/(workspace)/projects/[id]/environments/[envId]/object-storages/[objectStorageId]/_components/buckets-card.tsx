@@ -67,6 +67,7 @@ export function BucketsCard({
                     onDeleteBucket(bucket.id);
                   }}
                   title="Delete bucket"
+                  aria-label={`Delete bucket ${bucket.name}`}
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>

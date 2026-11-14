@@ -107,11 +107,18 @@ export function EnvVarEditor({
                 value={envVar.key}
                 onChange={(e) => handleChange(index, "key", e.target.value)}
                 onPaste={(e) => handlePaste(e, index)}
+                aria-label={`Variable ${index + 1} key`}
+                aria-invalid={isReserved || undefined}
                 className={`flex-1 font-mono text-sm ${isReserved ? "border-red-500" : ""}`}
               />
               <Input
                 value={envVar.value}
                 onChange={(e) => handleChange(index, "value", e.target.value)}
+                aria-label={
+                  envVar.key
+                    ? `Value for ${envVar.key}`
+                    : `Variable ${index + 1} value`
+                }
                 className="flex-1 font-mono text-sm"
               />
               <Button
@@ -120,6 +127,11 @@ export function EnvVarEditor({
                 size="icon"
                 className="opacity-50 hover:opacity-100"
                 onClick={() => handleRemove(index)}
+                aria-label={
+                  envVar.key
+                    ? `Remove ${envVar.key}`
+                    : `Remove variable ${index + 1}`
+                }
               >
                 <Trash2 className="h-4 w-4" />
               </Button>

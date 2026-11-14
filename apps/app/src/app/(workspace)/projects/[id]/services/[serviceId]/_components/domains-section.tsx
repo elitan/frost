@@ -14,7 +14,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { StatusBadge } from "@/components/status-badge";
@@ -43,6 +43,7 @@ import {
   getDomainNameValidationError,
   normalizeDomainName,
 } from "@/lib/domain-validation";
+import { copyText } from "@/lib/utils";
 
 interface VerificationState {
   isChecking: boolean;
@@ -101,26 +102,45 @@ export function DomainsSection({
     customDomains.filter((d) => d.dnsVerified).length > 0;
   const newDomainError = getDomainNameValidationError(newDomain);
 
-  const unverifiedDomainIds = useMemo(
-    () => domains?.filter((d) => !d.dnsVerified).map((d) => d.id) || [],
+  const unverifiedDomainIdsKey = useMemo(
+    () =>
+      domains
+        ?.filter((d) => !d.dnsVerified)
+        .map((d) => d.id)
+        .join(",") || "",
     [domains],
   );
 
-  const pendingSslDomainIds = useMemo(
+  const pendingSslDomainIdsKey = useMemo(
     () =>
       domains
         ?.filter((d) => d.dnsVerified && d.sslStatus !== "active")
-        .map((d) => d.id) || [],
+        .map((d) => d.id)
+        .join(",") || "",
     [domains],
   );
 
+  const verifyDns = verifyDnsMutation.mutateAsync;
+  const verifySsl = verifySslMutation.mutateAsync;
+  const verifyDnsRef = useRef(verifyDns);
+  const verifySslRef = useRef(verifySsl);
+  const domainsRef = useRef(domains);
   useEffect(() => {
-    if (unverifiedDomainIds.length === 0) return;
+    verifyDnsRef.current = verifyDns;
+    verifySslRef.current = verifySsl;
+    domainsRef.current = domains;
+  });
+
+  useEffect(() => {
+    if (!unverifiedDomainIdsKey) return;
+    const ids = unverifiedDomainIdsKey.split(",");
+    let cancelled = false;
 
     function updateState(
       id: string,
       updater: (current: VerificationState) => VerificationState | null,
     ): void {
+      if (cancelled) return;
       setVerificationState((prev) => {
         const next = new Map(prev);
         const current = next.get(id) || getDefaultVerificationState();
@@ -135,13 +155,15 @@ export function DomainsSection({
     }
 
     const interval = setInterval(async () => {
-      for (const id of unverifiedDomainIds) {
+      for (const id of ids) {
+        if (cancelled) return;
         updateState(id, (current) => ({ ...current, isChecking: true }));
 
         try {
-          const result = await verifyDnsMutation.mutateAsync(id);
+          const result = await verifyDnsRef.current(id);
+          if (cancelled) return;
           if (result.dnsVerified) {
-            const domain = domains?.find((d) => d.id === id);
+            const domain = domainsRef.current?.find((d) => d.id === id);
             toast.success(`DNS verified for ${domain?.domain}`);
             updateState(id, () => null);
           } else {
@@ -158,18 +180,25 @@ export function DomainsSection({
       }
     }, 5000);
 
-    return () => clearInterval(interval);
-  }, [unverifiedDomainIds, verifyDnsMutation, domains]);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [unverifiedDomainIdsKey]);
 
   useEffect(() => {
-    if (pendingSslDomainIds.length === 0) return;
+    if (!pendingSslDomainIdsKey) return;
+    const ids = pendingSslDomainIdsKey.split(",");
+    let cancelled = false;
 
     const interval = setInterval(async () => {
-      for (const id of pendingSslDomainIds) {
+      for (const id of ids) {
+        if (cancelled) return;
         try {
-          const result = await verifySslMutation.mutateAsync(id);
+          const result = await verifySslRef.current(id);
+          if (cancelled) return;
           if (result.working) {
-            const domain = domains?.find((d) => d.id === id);
+            const domain = domainsRef.current?.find((d) => d.id === id);
             toast.success(`SSL active for ${domain?.domain}`);
           }
         } catch {
@@ -178,8 +207,11 @@ export function DomainsSection({
       }
     }, 5000);
 
-    return () => clearInterval(interval);
-  }, [pendingSslDomainIds, verifySslMutation, domains]);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [pendingSslDomainIdsKey]);
 
   async function handleAddDomain() {
     if (!newDomain) return;
@@ -530,8 +562,11 @@ interface DomainRowProps {
 
 function CopyButton({ text }: { text: string }) {
   async function handleCopy() {
-    await navigator.clipboard.writeText(text);
-    toast.success("Copied to clipboard");
+    if (await copyText(text)) {
+      toast.success("Copied to clipboard");
+    } else {
+      toast.error("Failed to copy to clipboard");
+    }
   }
 
   return (
@@ -541,6 +576,7 @@ function CopyButton({ text }: { text: string }) {
       onClick={handleCopy}
       className="h-5 w-5 text-neutral-500 hover:text-neutral-300"
       title="Copy to clipboard"
+      aria-label="Copy to clipboard"
     >
       <Copy className="h-3 w-3" />
     </Button>

@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ExternalLink, Loader2, RotateCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DeploymentStatusIndicator } from "@/components/deployment-status-indicator";
 import { EmptyState } from "@/components/empty-state";
 import { LogConnectionStatus, LogViewer } from "@/components/log-viewer";
@@ -91,6 +92,8 @@ export function SidebarDeployments({
     useState<Deployment | null>(null);
   const selectedDeploymentRef = useRef<string | null>(null);
 
+  const [rollbackTarget, setRollbackTarget] = useState<Deployment | null>(null);
+
   const rollbackMutation = useMutation({
     mutationFn: (deploymentId: string) =>
       orpc.deployments.rollback.call({ deploymentId }),
@@ -99,6 +102,9 @@ export function SidebarDeployments({
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Rollback failed");
+    },
+    onSettled: () => {
+      setRollbackTarget(null);
     },
   });
 
@@ -193,7 +199,7 @@ export function SidebarDeployments({
                   onClick={() => handleSelectDeployment(d)}
                   canRollback={canRollback}
                   isRunning={isCurrent}
-                  onRollback={() => rollbackMutation.mutate(d.id)}
+                  onRollback={() => setRollbackTarget(d)}
                   isRollingBack={
                     rollbackMutation.isPending &&
                     rollbackMutation.variables === d.id
@@ -205,6 +211,24 @@ export function SidebarDeployments({
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={rollbackTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !rollbackMutation.isPending) setRollbackTarget(null);
+        }}
+        title="Roll back deployment?"
+        description={`This will redeploy ${
+          rollbackTarget?.commitSha
+            ? `commit ${rollbackTarget.commitSha.slice(0, 7)}`
+            : "this deployment"
+        } and replace the currently running version.`}
+        confirmLabel="Roll back"
+        loading={rollbackMutation.isPending}
+        onConfirm={() => {
+          if (rollbackTarget) rollbackMutation.mutate(rollbackTarget.id);
+        }}
+      />
 
       {selectedDeployment && (
         <div className="mt-3 flex min-h-0 flex-1 flex-col rounded-lg border border-neutral-700 bg-neutral-900">

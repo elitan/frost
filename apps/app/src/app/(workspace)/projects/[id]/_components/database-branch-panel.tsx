@@ -32,6 +32,7 @@ import { api } from "@/lib/api";
 import { buildPostgresConnectionString } from "@/lib/connection-strings";
 import { getDatabaseTargetStatus } from "@/lib/database-target-status";
 import { getTimeAgo } from "@/lib/time";
+import { copyText } from "@/lib/utils";
 import { DatabaseTableBrowser } from "./database-table-browser";
 import { RuntimeLogsPanel } from "./runtime-logs-panel";
 import { RuntimeMetricsCard } from "./runtime-metrics-card";
@@ -119,9 +120,12 @@ function getConnectionString(input: {
   return `mysql://${user}:${password}@${input.host}:${input.port}/${database}`;
 }
 
-function copyToClipboard(value: string) {
-  navigator.clipboard.writeText(value);
-  toast.success("Copied to clipboard");
+async function copyToClipboard(value: string) {
+  if (await copyText(value)) {
+    toast.success("Copied to clipboard");
+  } else {
+    toast.error("Failed to copy to clipboard");
+  }
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -645,6 +649,7 @@ export function DatabaseBranchPanel({
                             <Button
                               variant="ghost"
                               size="sm"
+                              aria-label="Copy internal connection string"
                               onClick={() =>
                                 copyToClipboard(internalConnectionString)
                               }
@@ -671,6 +676,7 @@ export function DatabaseBranchPanel({
                             <Button
                               variant="ghost"
                               size="sm"
+                              aria-label="Copy direct connection string"
                               onClick={() =>
                                 copyToClipboard(directConnectionString)
                               }
@@ -1026,6 +1032,7 @@ export function DatabaseBranchPanel({
                                 variant="ghost"
                                 size="icon"
                                 className="h-6 w-6 text-neutral-500 hover:text-neutral-300"
+                                aria-label="Copy internal hostname"
                                 onClick={() =>
                                   copyToClipboard(
                                     `${draftHostname}.frost.internal`,
