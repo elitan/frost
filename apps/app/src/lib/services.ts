@@ -21,7 +21,7 @@ export interface CreateServiceInput {
   buildContext?: string | null;
   imageUrl?: string | null;
   registryId?: string | null;
-  envVars?: { key: string; value: string }[];
+  envVars?: { key: string; value: string; buildTime?: boolean }[];
   containerPort?: number | null;
   healthCheckPath?: string | null;
   healthCheckTimeout?: number | null;

@@ -6,6 +6,12 @@ Set environment variables at two levels:
 
 **Service-level** - Specific to one service. Overrides project variables with the same name.
 
+## Build-time Variables
+
+All variables are set on the running container. Only build-time variables are passed to `docker build` (as `--build-arg` and in a `.env` file in the build context), because anything available during the build can end up in the image.
+
+Mark a variable as build-time with the **Build** checkbox, or `"buildTime": true` in the API. Keys starting with `NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`, `REACT_APP_`, `NUXT_PUBLIC_`, `EXPO_PUBLIC_` or `GATSBY_` are always build-time. Keep secrets runtime-only.
+
 ## Built-in Variables
 
 Frost automatically sets `PORT` (default 8080). Your app should listen on this port.

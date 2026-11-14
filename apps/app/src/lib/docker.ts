@@ -30,17 +30,35 @@ export interface BuildImageOptions {
   imageName: string;
   dockerfilePath?: string;
   buildContext?: string;
-  envVars?: Record<string, string>;
+  /** Passed as --build-arg; only build-time variables belong here. */
+  buildArgs?: Record<string, string>;
   labels?: Record<string, string>;
   onData?: (chunk: string) => void;
   timeoutMs?: number;
+}
+
+export function buildDockerBuildArgs(options: {
+  imageName: string;
+  dockerfile: string;
+  buildArgs?: Record<string, string>;
+  labels?: Record<string, string>;
+}): string[] {
+  const args = ["build", "-t", options.imageName, "-f", options.dockerfile];
+  for (const [key, value] of Object.entries(options.buildArgs ?? {})) {
+    args.push("--build-arg", `${key}=${value}`);
+  }
+  for (const [key, value] of Object.entries(options.labels ?? {})) {
+    args.push("--label", `${key}=${value}`);
+  }
+  args.push(".");
+  return args;
 }
 
 export async function buildImage(
   optionsOrRepoPath: BuildImageOptions | string,
   imageNameArg?: string,
   dockerfilePathArg: string = "Dockerfile",
-  envVarsArg?: Record<string, string>,
+  buildArgsArg?: Record<string, string>,
 ): Promise<BuildResult> {
   const options: BuildImageOptions =
     typeof optionsOrRepoPath === "string"
@@ -48,7 +66,7 @@ export async function buildImage(
           repoPath: optionsOrRepoPath,
           imageName: imageNameArg!,
           dockerfilePath: dockerfilePathArg,
-          envVars: envVarsArg,
+          buildArgs: buildArgsArg,
         }
       : optionsOrRepoPath;
 
@@ -57,7 +75,7 @@ export async function buildImage(
     imageName,
     dockerfilePath = "Dockerfile",
     buildContext,
-    envVars,
+    buildArgs,
     labels,
     onData,
     timeoutMs,
@@ -80,18 +98,12 @@ export async function buildImage(
     await removeImage(imageName);
   }
 
-  const args = ["build", "-t", imageName, "-f", resolvedDockerfile];
-  if (envVars) {
-    for (const [key, value] of Object.entries(envVars)) {
-      args.push("--build-arg", `${key}=${value}`);
-    }
-  }
-  if (labels) {
-    for (const [key, value] of Object.entries(labels)) {
-      args.push("--label", `${key}=${value}`);
-    }
-  }
-  args.push(".");
+  const args = buildDockerBuildArgs({
+    imageName,
+    dockerfile: resolvedDockerfile,
+    buildArgs,
+    labels,
+  });
 
   const result = await runCommand({
     command: "docker",

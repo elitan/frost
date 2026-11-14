@@ -4,6 +4,11 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { type Selectable, sql } from "kysely";
 import { getSetting } from "./auth";
+import {
+  envVarListToRecord,
+  mergeEnvVarLists,
+  selectBuildTimeEnvVars,
+} from "./build-env";
 import { emitBuildLogChunk } from "./build-log-stream";
 import { buildContainerCommandOptions } from "./container-command";
 import { decrypt } from "./crypto";
@@ -502,9 +507,8 @@ async function stripCloneCredentials(
   }
 }
 
-function parseEnvVars(envVarsJson: string): Record<string, string> {
-  const envVarsList: EnvVar[] = envVarsJson ? JSON.parse(envVarsJson) : [];
-  return Object.fromEntries(envVarsList.map((e) => [e.key, e.value]));
+function parseEnvVarList(envVarsJson: string): EnvVar[] {
+  return envVarsJson ? JSON.parse(envVarsJson) : [];
 }
 
 function isSafeEnvFileKey(key: string): boolean {
@@ -1300,13 +1304,12 @@ async function runServiceDeployment(
   let shouldRestoreCurrentDeploymentOnFailure = false;
   let trafficSwitched = false;
 
-  const projectEnvVars = parseEnvVars(project.envVars);
-  const serviceEnvVars = parseEnvVars(service.envVars);
-  const envVars = { ...projectEnvVars, ...serviceEnvVars };
-  const envVarsList: EnvVar[] = Object.entries(envVars).map(([key, value]) => ({
-    key,
-    value,
-  }));
+  const envVarsList: EnvVar[] = mergeEnvVarLists(
+    parseEnvVarList(project.envVars),
+    parseEnvVarList(service.envVars),
+  );
+  const envVars = envVarListToRecord(envVarsList);
+  const buildTimeEnvVarsList = selectBuildTimeEnvVars(envVarsList);
 
   let clonedRepoPath: string | null = null;
 
@@ -1514,12 +1517,12 @@ async function runServiceDeployment(
         .where("id", "=", deploymentId)
         .execute();
 
-      if (envVarsList.length > 0) {
-        const envFileContent = formatEnvFileContent(envVarsList);
+      if (buildTimeEnvVarsList.length > 0) {
+        const envFileContent = formatEnvFileContent(buildTimeEnvVarsList);
         writeEnvFileSafely(repoPath, envFileContent);
         await appendLog(
           deploymentId,
-          `Written ${envVarsList.length} env vars to .env\n`,
+          `Written ${buildTimeEnvVarsList.length} build-time env vars to .env\n`,
         );
       }
 
@@ -1542,7 +1545,7 @@ async function runServiceDeployment(
           imageName,
           dockerfilePath: effectiveService.dockerfilePath ?? undefined,
           buildContext: service.buildContext ?? undefined,
-          envVars,
+          buildArgs: envVarListToRecord(buildTimeEnvVarsList),
           labels: baseLabels,
           timeoutMs: getRemainingTimeoutMs(),
           onData(chunk) {

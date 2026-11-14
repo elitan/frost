@@ -20,6 +20,7 @@ export type CreateServiceInput = Omit<
 export interface EnvVar {
   key: string;
   value: string;
+  buildTime?: boolean;
 }
 
 export interface ServiceDefinition {

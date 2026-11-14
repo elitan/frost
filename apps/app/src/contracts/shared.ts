@@ -12,6 +12,12 @@ export const envVarSchema = z.object({
       "Env var key must not contain '=', whitespace or NUL",
     ),
   value: z.string(),
+  buildTime: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also pass this variable to `docker build` (as --build-arg and in the build-context .env). Build-time values are visible in the image, so leave secrets runtime-only. Keys with a public prefix (NEXT_PUBLIC_, VITE_, PUBLIC_, REACT_APP_, NUXT_PUBLIC_, EXPO_PUBLIC_, GATSBY_) are always build-time. All variables are available at runtime.",
+    ),
 });
 
 export const volumeConfigSchema = z.object({

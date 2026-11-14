@@ -2,7 +2,56 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getDatabaseTargetReservedPorts, resolveBuildPaths } from "./docker";
+import { envVarListToRecord, selectBuildTimeEnvVars } from "./build-env";
+import {
+  buildDockerBuildArgs,
+  getDatabaseTargetReservedPorts,
+  resolveBuildPaths,
+} from "./docker";
+
+describe("buildDockerBuildArgs", function describeBuildArgs() {
+  test("passes only build-time vars as --build-arg", function testBuildArgs() {
+    const envVars = [
+      { key: "DATABASE_URL", value: "postgres://secret" },
+      { key: "NEXT_PUBLIC_API_URL", value: "https://api" },
+      { key: "SENTRY_AUTH_TOKEN", value: "tok", buildTime: true },
+    ];
+    const args = buildDockerBuildArgs({
+      imageName: "img:1",
+      dockerfile: "Dockerfile",
+      buildArgs: envVarListToRecord(selectBuildTimeEnvVars(envVars)),
+      labels: { "frost.managed": "true" },
+    });
+    const buildArgs = args.filter(
+      (_, i) => i > 0 && args[i - 1] === "--build-arg",
+    );
+    expect(buildArgs).toEqual([
+      "NEXT_PUBLIC_API_URL=https://api",
+      "SENTRY_AUTH_TOKEN=tok",
+    ]);
+    expect(args.join(" ")).not.toContain("DATABASE_URL");
+    expect(args.slice(0, 5)).toEqual([
+      "build",
+      "-t",
+      "img:1",
+      "-f",
+      "Dockerfile",
+    ]);
+    expect(args[args.indexOf("--label") + 1]).toBe("frost.managed=true");
+    expect(args[args.length - 1]).toBe(".");
+  });
+
+  test("no build args when nothing is build-time", function testNone() {
+    const args = buildDockerBuildArgs({
+      imageName: "img",
+      dockerfile: "Dockerfile",
+      buildArgs: envVarListToRecord(
+        selectBuildTimeEnvVars([{ key: "SECRET", value: "x" }]),
+      ),
+    });
+    expect(args).not.toContain("--build-arg");
+  });
+});
 
 describe("getDatabaseTargetReservedPorts", function describeReservedPorts() {
   test("returns provider and runtime host ports", function testReservedPorts() {

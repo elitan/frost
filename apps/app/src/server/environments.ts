@@ -134,6 +134,7 @@ export const environments = {
               ? (JSON.parse(service.envVars) as {
                   key: string;
                   value: string;
+                  buildTime?: boolean;
                 }[])
               : [];
             const volumes = service.volumes

@@ -42,4 +42,17 @@ describe("envVarSchema", () => {
       expect(envVarSchema.safeParse({ key, value: "" }).success).toBe(false);
     }
   });
+
+  test("buildTime is optional and round-trips", () => {
+    const legacy = envVarSchema.parse({ key: "A", value: "1" });
+    expect(legacy).toEqual({ key: "A", value: "1" });
+    expect("buildTime" in legacy).toBe(false);
+    expect(
+      envVarSchema.parse({ key: "A", value: "1", buildTime: true }),
+    ).toEqual({ key: "A", value: "1", buildTime: true });
+    expect(
+      envVarSchema.safeParse({ key: "A", value: "1", buildTime: "yes" })
+        .success,
+    ).toBe(false);
+  });
 });

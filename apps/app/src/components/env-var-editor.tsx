@@ -5,10 +5,12 @@ import Link from "next/link";
 import { type ClipboardEvent, useEffect, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { hasPublicBuildEnvPrefix } from "@/lib/build-env";
 
 interface EnvVar {
   key: string;
   value: string;
+  buildTime?: boolean;
 }
 
 interface EnvVarEditorProps {
@@ -40,6 +42,11 @@ function parseEnvContent(text: string): EnvVar[] {
 }
 
 const RESERVED_KEYS = ["PORT"];
+
+const BUILD_TOGGLE_TITLE =
+  "Available during docker build (as a build arg and in .env); will be visible in the image. Leave unchecked for secrets.";
+const AUTO_BUILD_TITLE =
+  "Public-prefixed variables are always available during docker build and will be visible in the image.";
 
 export function EnvVarEditor({
   value,
@@ -75,6 +82,13 @@ export function EnvVarEditor({
     onChange(updated);
   }
 
+  function handleBuildTimeChange(index: number, checked: boolean) {
+    const updated = [...value];
+    const { buildTime: _buildTime, ...rest } = updated[index];
+    updated[index] = checked ? { ...rest, buildTime: true } : rest;
+    onChange(updated);
+  }
+
   function handlePaste(e: ClipboardEvent<HTMLInputElement>, index: number) {
     const text = e.clipboardData.getData("text");
     if (text.includes("=") && text.includes("\n")) {
@@ -94,12 +108,19 @@ export function EnvVarEditor({
         <div className="flex gap-2 text-xs text-muted-foreground font-medium">
           <div className="flex-1">KEY</div>
           <div className="flex-1">VALUE</div>
+          <div className="w-12 text-center" title={BUILD_TOGGLE_TITLE}>
+            BUILD
+          </div>
           <div className="w-9" />
         </div>
       )}
       {value.map((envVar, index) => {
         const id = `${baseId}-${index}`;
         const isReserved = reservedKeysUpper.has(envVar.key.toUpperCase());
+        const isAutoBuildTime = hasPublicBuildEnvPrefix(envVar.key.trim());
+        const buildLabel = envVar.key
+          ? `Available during build: ${envVar.key}`
+          : `Variable ${index + 1} available during build`;
         return (
           <div key={id} className="space-y-1">
             <div className="flex gap-2 group">
@@ -121,6 +142,21 @@ export function EnvVarEditor({
                 }
                 className="flex-1 font-mono text-sm"
               />
+              <label
+                className="flex w-12 shrink-0 items-center justify-center"
+                title={isAutoBuildTime ? AUTO_BUILD_TITLE : BUILD_TOGGLE_TITLE}
+              >
+                <input
+                  type="checkbox"
+                  checked={isAutoBuildTime || envVar.buildTime === true}
+                  disabled={isAutoBuildTime}
+                  onChange={(e) =>
+                    handleBuildTimeChange(index, e.target.checked)
+                  }
+                  aria-label={buildLabel}
+                  className="h-4 w-4 rounded border-neutral-700 bg-neutral-800 disabled:opacity-60"
+                />
+              </label>
               <Button
                 type="button"
                 variant="ghost"
@@ -154,6 +190,14 @@ export function EnvVarEditor({
           </div>
         );
       })}
+      {value.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          All variables are set at runtime. Only variables marked Build are
+          passed to docker build, where they are visible in the image.
+          Public-prefixed keys (NEXT_PUBLIC_, VITE_, PUBLIC_, ...) are always
+          build-time.
+        </p>
+      )}
       <Button
         type="button"
         variant="ghost"

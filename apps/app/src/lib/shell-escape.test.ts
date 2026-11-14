@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { envVarListToRecord } from "./build-env";
 import { buildDockerRunArgs, shellEscape } from "./shell-escape";
 
 describe("shellEscape", () => {
@@ -69,6 +70,23 @@ describe("buildDockerRunArgs", () => {
       .sort();
     expect(envPairs).toContain("FOO=bar");
     expect(envPairs).toContain("DB_URL=postgres://localhost");
+  });
+
+  test("runtime receives all vars regardless of buildTime", () => {
+    const args = buildDockerRunArgs({
+      imageName: "myimage",
+      hostPort: 10000,
+      name: "test",
+      envVars: envVarListToRecord([
+        { key: "SECRET", value: "s" },
+        { key: "BUILD_ONLY", value: "b", buildTime: true },
+        { key: "VITE_URL", value: "v" },
+      ]),
+    });
+    const envPairs = args.filter((_, i) => i > 0 && args[i - 1] === "-e");
+    expect(envPairs).toContain("SECRET=s");
+    expect(envPairs).toContain("BUILD_ONLY=b");
+    expect(envPairs).toContain("VITE_URL=v");
   });
 
   test("malicious env var values are passed literally (not interpreted)", () => {
