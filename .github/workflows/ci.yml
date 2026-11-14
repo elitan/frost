@@ -22,10 +22,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-
-env:
-  SSH_KEY_NAME: frost-e2e-ci
-
 jobs:
   typecheck:
     runs-on: ubuntu-latest
@@ -257,18 +253,16 @@ jobs:
   e2e-upgrade:
     needs: [build, changes]
     if: needs.changes.outputs.upgrade == 'true'
-    runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: arm64
-            server_type: cax21
-            snapshot_id: "353027283"
           - arch: amd64
-            server_type: cx23
-            snapshot_id: "353027282"
+            os: ubuntu-24.04
+          - arch: arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
 
     name: e2e-upgrade (${{ matrix.arch }})
 
@@ -294,124 +288,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Create server from snapshot
+      - name: Prepare runner as a fresh server
         if: steps.release.outputs.skip != 'true'
         id: server
         run: |
-          echo "Creating server from snapshot..."
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            read -r -a DELAYS <<< "${HETZNER_CAPACITY_RETRY_DELAYS:-0 30 60 120 240 600}"
-          else
-            read -r -a DELAYS <<< "${HETZNER_CAPACITY_RETRY_DELAYS:-0 30 60}"
-          fi
-          echo "Capacity retry delays: ${DELAYS[*]}s"
-          LOCATIONS=(fsn1 nbg1 hel1)
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            SERVER_TYPES=(cax21 cax31 cax41)
-          else
-            SERVER_TYPES=("${{ matrix.server_type }}")
-          fi
-          ATTEMPT=1
-          LAST_ERROR_CODE=""
-          NON_CAPACITY_ERROR=0
-
-          for DELAY in "${DELAYS[@]}"; do
-            if [ "$DELAY" != "0" ]; then
-              echo "Waiting ${DELAY}s before retry sweep..."
-              sleep "$DELAY"
-            fi
-
-            for SERVER_TYPE in "${SERVER_TYPES[@]}"; do
-              for LOCATION in "${LOCATIONS[@]}"; do
-                echo "Attempt $ATTEMPT with $SERVER_TYPE in $LOCATION..."
-                RESPONSE=$(curl -s -X POST \
-                  -H "Authorization: Bearer ${{ secrets.HETZNER_API_TOKEN }}" \
-                  -H "Content-Type: application/json" \
-                  -d "$(jq -n \
-                    --arg name "frost-upgrade-${{ github.run_id }}-${{ matrix.arch }}" \
-                    --arg server_type "$SERVER_TYPE" \
-                    --arg image "${{ matrix.snapshot_id }}" \
-                    --arg location "$LOCATION" \
-                    --arg ssh_key "${{ env.SSH_KEY_NAME }}" \
-                    --arg purpose "frost-e2e-upgrade" \
-                    '{name: $name, server_type: $server_type, image: $image, location: $location, ssh_keys: [$ssh_key], start_after_create: true, labels: {purpose: $purpose}}')" \
-                  "https://api.hetzner.cloud/v1/servers")
-
-                SERVER_ID=$(echo "$RESPONSE" | jq -r '.server.id')
-                SERVER_IP=$(echo "$RESPONSE" | jq -r '.server.public_net.ipv4.ip')
-
-                if [ "$SERVER_ID" != "null" ] && [ -n "$SERVER_ID" ]; then
-                  echo "skipped=false" >> $GITHUB_OUTPUT
-                  echo "server_id=$SERVER_ID" >> $GITHUB_OUTPUT
-                  echo "ip=$SERVER_IP" >> $GITHUB_OUTPUT
-                  echo "location=$LOCATION" >> $GITHUB_OUTPUT
-                  echo "Server created: ID=$SERVER_ID, IP=$SERVER_IP"
-                  exit 0
-                fi
-
-                ERROR_CODE=$(echo "$RESPONSE" | jq -r '.error.code // empty')
-                LAST_ERROR_CODE="$ERROR_CODE"
-                if [ "$ERROR_CODE" != "resource_unavailable" ]; then
-                  NON_CAPACITY_ERROR=1
-                fi
-                echo "Failed to create server with $SERVER_TYPE in $LOCATION (error: $ERROR_CODE):"
-                echo "$RESPONSE" | jq
-                ATTEMPT=$((ATTEMPT + 1))
-              done
-            done
-          done
-
-          echo "All server creation attempts failed"
-          if [ "$LAST_ERROR_CODE" = "resource_unavailable" ] && [ "$NON_CAPACITY_ERROR" = "0" ]; then
-            echo "skipped=true" >> $GITHUB_OUTPUT
-            echo "Skipping ${{ matrix.arch }} upgrade e2e because Hetzner returned resource_unavailable for every server type and location"
-            exit 0
-          fi
-          exit 1
-
-      - name: Wait for server ready
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
-        run: |
-          echo "Waiting for server to be running..."
-          for i in {1..30}; do
-            STATUS=$(curl -s \
-              -H "Authorization: Bearer ${{ secrets.HETZNER_API_TOKEN }}" \
-              "https://api.hetzner.cloud/v1/servers/${{ steps.server.outputs.server_id }}" \
-              | jq -r '.server.status')
-
-            echo "Server status: $STATUS"
-            if [ "$STATUS" = "running" ]; then
-              echo "Server is running!"
-              break
-            fi
-            sleep 5
-          done
-
-      - name: Setup SSH
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H ${{ steps.server.outputs.ip }} >> ~/.ssh/known_hosts 2>/dev/null || true
-
-      - name: Wait for SSH
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
-        run: |
-          echo "Waiting for SSH..."
-          for i in {1..30}; do
-            if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@${{ steps.server.outputs.ip }} "echo 'SSH ready'" 2>/dev/null; then
-              echo "SSH is ready!"
-              exit 0
-            fi
-            echo "Attempt $i: SSH not ready..."
-            sleep 5
-          done
-          echo "SSH failed"
-          exit 1
+          sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service >/dev/null 2>&1 || true
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y -qq openssh-server >/dev/null
+          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+          sudo mkdir -p /root/.ssh
+          sudo cp ~/.ssh/id_ed25519.pub /root/.ssh/authorized_keys
+          sudo chmod 700 /root/.ssh && sudo chmod 600 /root/.ssh/authorized_keys
+          sudo systemctl restart ssh || sudo systemctl restart sshd
+          ssh-keyscan -H 127.0.0.1 >> ~/.ssh/known_hosts 2>/dev/null
+          ssh root@127.0.0.1 "echo SSH ready"
+          echo "ip=127.0.0.1" >> "$GITHUB_OUTPUT"
 
       - name: Install Frost from latest release
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         id: install
         run: |
           TAG="${{ steps.release.outputs.tag }}"
@@ -451,7 +344,7 @@ jobs:
           echo "API key extracted: ${API_KEY:0:12}..."
 
       - name: Wait for Frost (pre-upgrade)
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         run: |
           echo "Waiting for Frost..."
           for i in {1..12}; do
@@ -467,7 +360,7 @@ jobs:
           exit 1
 
       - name: Create pre-upgrade test data
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         id: predata
         run: |
           set -o pipefail
@@ -475,7 +368,7 @@ jobs:
           ./apps/app/scripts/e2e-upgrade-create.sh "${{ steps.server.outputs.ip }}" "${{ steps.install.outputs.api_key }}" 2>&1 | tee /tmp/e2e-create.log
 
       - name: Upgrade to PR branch
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         run: |
           set -o pipefail
           chmod +x ./apps/app/scripts/e2e-update-ui.sh
@@ -486,7 +379,7 @@ jobs:
             "${{ github.repository }}" 2>&1 | tee /tmp/e2e-upgrade.log
 
       - name: Initialize test fixture git repos
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         run: |
           ssh root@${{ steps.server.outputs.ip }} 'git config --global user.email "ci@frost.dev" && git config --global user.name "Frost CI" && git config --global --add safe.directory "*"
             for dir in /opt/frost/apps/app/test/fixtures/*/; do
@@ -496,7 +389,7 @@ jobs:
             done'
 
       - name: Wait for Frost (post-upgrade)
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         run: |
           echo "Waiting for Frost after upgrade..."
           for i in {1..12}; do
@@ -512,7 +405,7 @@ jobs:
           exit 1
 
       - name: Verify pre-upgrade data survived
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         run: |
           set -o pipefail
           chmod +x ./apps/app/scripts/e2e-upgrade-verify.sh
@@ -524,7 +417,7 @@ jobs:
             "${{ steps.predata.outputs.deployment_id }}" 2>&1 | tee /tmp/e2e-verify.log
 
       - name: Run standard E2E tests
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         run: |
           chmod +x ./apps/app/scripts/e2e-test.sh
           set -o pipefail
@@ -534,7 +427,7 @@ jobs:
           E2E_GROUPS: 04-update,10-race,20-setup
 
       - name: Create broken branch for rollback test
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         id: broken
         run: |
           BROKEN_BRANCH="frost-e2e-broken-${{ github.run_id }}-${{ matrix.arch }}"
@@ -542,7 +435,7 @@ jobs:
           echo "branch=$BROKEN_BRANCH" >> $GITHUB_OUTPUT
 
       - name: Create broken migration branch for rollback test
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         id: broken_migration
         run: |
           BROKEN_BRANCH="frost-e2e-broken-migration-${{ github.run_id }}-${{ matrix.arch }}"
@@ -550,7 +443,7 @@ jobs:
           echo "branch=$BROKEN_BRANCH" >> $GITHUB_OUTPUT
 
       - name: Test rollback on build failure
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         run: |
           set -o pipefail
           chmod +x ./apps/app/scripts/e2e-update-rollback.sh
@@ -561,7 +454,7 @@ jobs:
             "${{ github.repository }}" 2>&1 | tee /tmp/e2e-rollback.log
 
       - name: Test rollback on migration failure
-        if: steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true'
+        if: steps.release.outputs.skip != 'true'
         run: |
           set -o pipefail
           chmod +x ./apps/app/scripts/e2e-update-rollback.sh
@@ -583,7 +476,7 @@ jobs:
           echo "No remote broken migration branch to delete: ${{ steps.broken_migration.outputs.branch }}"
 
       - name: Collect logs on failure
-        if: failure() && steps.release.outputs.skip != 'true' && steps.server.outputs.skipped != 'true' && steps.server.outputs.ip
+        if: failure() && steps.release.outputs.skip != 'true' && steps.server.outputs.ip
         run: |
           echo "=========================================="
           echo "=== LOCAL TEST SCRIPT OUTPUTS ==="
@@ -640,12 +533,3 @@ jobs:
           echo ""
           echo "=== .next cache state ==="
           ssh root@${{ steps.server.outputs.ip }} "ls -la /opt/frost/apps/app/.next/ 2>/dev/null | head -20" || echo "(no .next dir)"
-
-      - name: Delete server
-        if: always() && steps.server.outputs.server_id
-        run: |
-          echo "Deleting server ${{ steps.server.outputs.server_id }}..."
-          curl -s -X DELETE \
-            -H "Authorization: Bearer ${{ secrets.HETZNER_API_TOKEN }}" \
-            "https://api.hetzner.cloud/v1/servers/${{ steps.server.outputs.server_id }}"
-          echo "Server deleted"
