@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSetting } from "@/lib/auth";
+import { db } from "@/lib/db";
 import { isDemoMode } from "@/lib/demo-mode";
 import { deployService } from "@/lib/deployer";
 import {
@@ -285,6 +286,12 @@ async function deployPreviewForProject(
     prTitle,
   );
   const envName = previewEnvironmentName(prNumber, prTitle);
+  const project = await db
+    .selectFrom("projects")
+    .select("previewInheritEnvVars")
+    .where("id", "=", projectId)
+    .executeTakeFirst();
+  const inheritProductionEnvVars = Boolean(project?.previewInheritEnvVars);
 
   const deploymentIds: string[] = [];
   const serviceStatuses: ServiceDeployStatus[] = [];
@@ -295,6 +302,7 @@ async function deployPreviewForProject(
       projectHostname,
       envName,
       targetBranch: branch,
+      inheritProductionEnvVars,
     });
 
     if (await hasExistingDeployment(clonedServiceId, commitSha)) {

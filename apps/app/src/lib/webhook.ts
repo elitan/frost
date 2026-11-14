@@ -5,6 +5,10 @@ import { getDomainsForService } from "./domains";
 import { normalizeGitHubUrl, updatePRComment } from "./github";
 import { newEnvironmentId } from "./id";
 import { cleanupEnvironment } from "./lifecycle";
+import {
+  parseEnvVarList,
+  selectClonedServiceEnvVars,
+} from "./preview-env-vars";
 import { getPreferredDomain } from "./service-url";
 import {
   assertUserFacingServiceType,
@@ -194,6 +198,7 @@ interface CloneServiceInput {
   projectHostname: string;
   envName: string;
   targetBranch: string;
+  inheritProductionEnvVars: boolean;
 }
 
 export async function cloneServiceToEnvironment(
@@ -236,9 +241,10 @@ export async function cloneServiceToEnvironment(
   assertUserFacingServiceType(sourceService);
 
   const hostname = sourceService.hostname ?? slugify(sourceService.name);
-  const envVars = sourceService.envVars
-    ? (JSON.parse(sourceService.envVars) as { key: string; value: string }[])
-    : [];
+  const envVars = selectClonedServiceEnvVars(
+    parseEnvVarList(sourceService.envVars),
+    input.inheritProductionEnvVars,
+  );
   const volumes = sourceService.volumes
     ? (JSON.parse(sourceService.volumes) as { name: string; path: string }[])
     : [];

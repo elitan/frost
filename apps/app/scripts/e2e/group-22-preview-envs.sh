@@ -23,7 +23,7 @@ ENV_ID=$(get_default_environment "$PROJECT_ID") || fail "Failed to get environme
 log "Using production environment: $ENV_ID"
 
 SERVICE=$(api -X POST "$BASE_URL/api/environments/$ENV_ID/services" \
-  -d "{\"name\":\"preview-test\",\"repoUrl\":\"https://github.com/elitan/frost.git\",\"branch\":\"main\",\"dockerfilePath\":\"apps/app/test/fixtures/simple-node/Dockerfile.repo\"}")
+  -d "{\"name\":\"preview-test\",\"repoUrl\":\"https://github.com/elitan/frost.git\",\"branch\":\"main\",\"dockerfilePath\":\"apps/app/test/fixtures/simple-node/Dockerfile.repo\",\"envVars\":[{\"key\":\"PROD_SECRET\",\"value\":\"do-not-leak\"}]}")
 SERVICE_ID=$(require_field "$SERVICE" '.id' "create service") || fail "Failed to create service: $SERVICE"
 log "Created service: $SERVICE_ID"
 
@@ -61,6 +61,13 @@ ENV_DATA=$(api "$BASE_URL/api/environments/$PREVIEW_ENV_ID")
 ENV_NAME=$(json_get "$ENV_DATA" '.name')
 [ "$ENV_NAME" = "pr-$PR_NUMBER-add-user-authentication" ] || fail "Expected env name 'pr-$PR_NUMBER-add-user-authentication', got: $ENV_NAME"
 log "Environment name correct: $ENV_NAME"
+
+log "Verifying preview service does not inherit production variables by default..."
+PREVIEW_SERVICES=$(api "$BASE_URL/api/environments/$PREVIEW_ENV_ID/services")
+PREVIEW_SERVICE_ENV=$(echo "$PREVIEW_SERVICES" | jq -r '.[] | select(.name == "preview-test") | .envVars')
+[ -z "$PREVIEW_SERVICE_ENV" ] && fail "Preview service not found: $PREVIEW_SERVICES"
+echo "$PREVIEW_SERVICE_ENV" | grep -q "PROD_SECRET" && fail "Preview service should not inherit production env vars. Got: $PREVIEW_SERVICE_ENV"
+log "Preview service has no production variables"
 
 log "Waiting for preview deployment..."
 PREVIEW_DEPLOYS=$(echo "$PR_OPENED_RESULT" | jq -r '.deployments[0]')

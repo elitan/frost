@@ -354,6 +354,12 @@ export const projects = {
     if (input.envVars !== undefined) {
       updates.envVars = JSON.stringify(input.envVars);
     }
+    if (input.previewInheritEnvVars !== undefined) {
+      updates.previewInheritEnvVars = input.previewInheritEnvVars ? 1 : 0;
+    }
+    if (input.previewEnvVars !== undefined) {
+      updates.previewEnvVars = JSON.stringify(input.previewEnvVars);
+    }
 
     if (Object.keys(updates).length > 0) {
       await db

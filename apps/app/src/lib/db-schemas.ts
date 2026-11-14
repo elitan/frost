@@ -492,6 +492,8 @@ export const projectsSchema = z.object({
   envVars: z.string(),
   createdAt: z.number(),
   hostname: z.string().nullable(),
+  previewInheritEnvVars: z.coerce.boolean(),
+  previewEnvVars: z.string(),
 });
 
 export const newProjectsSchema = z.object({
@@ -500,6 +502,8 @@ export const newProjectsSchema = z.object({
   envVars: z.string().optional(),
   createdAt: z.number(),
   hostname: z.string().nullable(),
+  previewInheritEnvVars: z.coerce.boolean().optional(),
+  previewEnvVars: z.string().optional(),
 });
 
 export const projectsUpdateSchema = z.object({
@@ -508,6 +512,8 @@ export const projectsUpdateSchema = z.object({
   envVars: z.string().optional(),
   createdAt: z.number().optional(),
   hostname: z.string().nullable().optional(),
+  previewInheritEnvVars: z.coerce.boolean().optional(),
+  previewEnvVars: z.string().optional(),
 });
 
 export type Projects = z.infer<typeof projectsSchema>;

@@ -6,7 +6,6 @@ import { type Selectable, sql } from "kysely";
 import { getSetting } from "./auth";
 import {
   envVarListToRecord,
-  mergeEnvVarLists,
   selectBuildTimeEnvVars,
 } from "./build-env";
 import { emitBuildLogChunk } from "./build-log-stream";
@@ -53,6 +52,10 @@ import {
 } from "./github";
 import { detectIcon, detectIconFromImage } from "./icon-detector";
 import { newDeploymentClaimId, newDeploymentId, newReplicaId } from "./id";
+import {
+  parseEnvVarList,
+  resolveDeploymentEnvVarList,
+} from "./preview-env-vars";
 import { runCommand } from "./process-runner";
 import { USER_FACING_SERVICE_TYPES } from "./service-visibility";
 import { shellEscape } from "./shell-escape";
@@ -505,10 +508,6 @@ async function stripCloneCredentials(
       `Failed to remove credentials from cloned repo: ${result.error || result.output}`,
     );
   }
-}
-
-function parseEnvVarList(envVarsJson: string): EnvVar[] {
-  return envVarsJson ? JSON.parse(envVarsJson) : [];
 }
 
 function isSafeEnvFileKey(key: string): boolean {
@@ -1304,10 +1303,13 @@ async function runServiceDeployment(
   let shouldRestoreCurrentDeploymentOnFailure = false;
   let trafficSwitched = false;
 
-  const envVarsList: EnvVar[] = mergeEnvVarLists(
-    parseEnvVarList(project.envVars),
-    parseEnvVarList(service.envVars),
-  );
+  const envVarsList: EnvVar[] = resolveDeploymentEnvVarList({
+    environmentType: environment.type,
+    projectEnvVars: parseEnvVarList(project.envVars),
+    previewEnvVars: parseEnvVarList(project.previewEnvVars),
+    previewInheritEnvVars: project.previewInheritEnvVars,
+    serviceEnvVars: parseEnvVarList(service.envVars),
+  });
   const envVars = envVarListToRecord(envVarsList);
   const buildTimeEnvVarsList = selectBuildTimeEnvVars(envVarsList);
 

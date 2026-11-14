@@ -13,6 +13,7 @@ import {
   useUpdateProject,
 } from "@/hooks/use-projects";
 import type { EnvVar } from "@/lib/api";
+import { PreviewVariablesCard } from "./_components/preview-variables-card";
 
 export default function ProjectVariablesPage() {
   const params = useParams();
@@ -63,33 +64,36 @@ export default function ProjectVariablesPage() {
   if (!project) return null;
 
   return (
-    <SettingCard
-      title="Project Environment Variables"
-      description="These environment variables are inherited by all services in this project."
-      learnMoreUrl="/docs/guides/env-vars"
-      learnMoreText="Learn more about environment variables"
-      onSubmit={handleSave}
-      footerRight={
-        <Button
-          size="sm"
-          type="submit"
-          disabled={
-            updateMutation.isPending || !hasChanges || hasValidationErrors
-          }
-        >
-          {updateMutation.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            "Save"
-          )}
-        </Button>
-      }
-    >
-      <EnvVarEditor
-        value={envVars}
-        onChange={setEnvVars}
-        onValidationChange={setHasValidationErrors}
-      />
-    </SettingCard>
+    <div className="space-y-6">
+      <SettingCard
+        title="Project Environment Variables"
+        description="These environment variables are inherited by all services in this project."
+        learnMoreUrl="/docs/guides/env-vars"
+        learnMoreText="Learn more about environment variables"
+        onSubmit={handleSave}
+        footerRight={
+          <Button
+            size="sm"
+            type="submit"
+            disabled={
+              updateMutation.isPending || !hasChanges || hasValidationErrors
+            }
+          >
+            {updateMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              "Save"
+            )}
+          </Button>
+        }
+      >
+        <EnvVarEditor
+          value={envVars}
+          onChange={setEnvVars}
+          onValidationChange={setHasValidationErrors}
+        />
+      </SettingCard>
+      <PreviewVariablesCard projectId={projectId} />
+    </div>
   );
 }

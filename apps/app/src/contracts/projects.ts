@@ -75,6 +75,8 @@ export const projectsContract = {
         projectId: z.string(),
         name: z.string().min(1).optional(),
         envVars: z.array(envVarSchema).optional(),
+        previewInheritEnvVars: z.boolean().optional(),
+        previewEnvVars: z.array(envVarSchema).optional(),
       }),
     )
     .output(projectsSchema),

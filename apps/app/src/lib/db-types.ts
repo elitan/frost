@@ -291,6 +291,8 @@ export interface Projects {
   hostname: string | null;
   envVars: Generated<string>;
   createdAt: number;
+  previewInheritEnvVars: Generated<boolean>;
+  previewEnvVars: Generated<string>;
 }
 
 export interface Registries {
