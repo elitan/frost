@@ -3,13 +3,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { DeploymentStatusIndicator } from "@/components/deployment-status-indicator";
-import { LogConnectionStatus, LogViewer } from "@/components/log-viewer";
+import {
+  LogConnectionStatus,
+  type LogStreamState,
+  LogViewer,
+} from "@/components/log-viewer";
+import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useBuildLogs } from "@/hooks/use-build-logs";
 import { useDeployments, useService } from "@/hooks/use-services";
 import { orpc } from "@/lib/orpc-client";
-import { getTimeAgo } from "@/lib/time";
+import { DeploymentRef } from "../services/[serviceId]/_components/deployment-ref";
 
 interface ServiceDeploymentViewProps {
   serviceId: string;
@@ -25,17 +30,28 @@ function replicaStatusToDotStatus(
   return "pending";
 }
 
+// Build output only streams while the deployment is being built/rolled out.
+// Once it reaches a terminal status the stored log is final.
 const ACTIVE_BUILD_STATUSES = new Set([
   "pending",
   "cloning",
   "pulling",
   "building",
   "deploying",
-  "running",
 ]);
 
 function shouldStreamBuildLogs(status: string): boolean {
   return ACTIVE_BUILD_STATUSES.has(status);
+}
+
+function getBuildLogStreamState(
+  status: string,
+  isConnected: boolean,
+): LogStreamState {
+  if (!shouldStreamBuildLogs(status)) {
+    return status === "failed" ? "failed" : "finished";
+  }
+  return isConnected ? "live" : "reconnecting";
 }
 
 export function ServiceDeploymentView({
@@ -103,10 +119,12 @@ export function ServiceDeploymentView({
           </p>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-neutral-500">
             <DeploymentStatusIndicator status={deployment.status} />
-            <span className="font-mono">
-              {deployment.commitSha?.slice(0, 7) || deployment.id.slice(0, 7)}
-            </span>
-            <span>{getTimeAgo(new Date(deployment.createdAt))}</span>
+            <DeploymentRef
+              value={deployment.commitSha}
+              deployType={service.deployType}
+              fallback={deployment.id.slice(0, 7)}
+            />
+            <RelativeTime date={deployment.createdAt} />
           </div>
         </div>
       </div>
@@ -161,16 +179,16 @@ export function ServiceDeploymentView({
         )}
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-neutral-800 bg-black">
-          {streamBuildLogs && (
-            <LogConnectionStatus
-              isConnected={isConnected}
-              className="border-b border-neutral-900 bg-neutral-950/60 px-4 py-2"
-            />
-          )}
           <LogViewer
             logs={displayLogs}
             error={error}
             emptyMessage="No logs yet..."
+            defaultWrap
+            toolbarStart={
+              <LogConnectionStatus
+                state={getBuildLogStreamState(deployment.status, isConnected)}
+              />
+            }
           />
         </div>
       </div>

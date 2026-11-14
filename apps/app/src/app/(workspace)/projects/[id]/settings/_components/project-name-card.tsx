@@ -26,7 +26,7 @@ export function ProjectNameCard({ projectId }: ProjectNameCardProps) {
     }
   }, [project]);
 
-  const hasChanges = name !== initialName.current;
+  const hasChanges = name.trim() !== initialName.current;
 
   async function handleSave() {
     if (!name.trim()) {
@@ -65,18 +65,20 @@ export function ProjectNameCard({ projectId }: ProjectNameCardProps) {
     >
       <div className="space-y-4">
         <Input
+          id="project-name"
+          aria-label="Project name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="my-project"
         />
         {project.hostname && (
           <div>
-            <span className="text-sm text-neutral-500">Hostname</span>
+            <span className="text-sm text-neutral-400">Hostname</span>
             <p className="mt-1 font-mono text-sm text-neutral-300">
               {project.hostname}
             </p>
             <p className="mt-1 text-xs text-neutral-500">
-              Used in wildcard domains and service hostnames
+              Used in wildcard domains and service hostnames.
             </p>
           </div>
         )}

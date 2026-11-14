@@ -6,6 +6,7 @@ import { ChevronLeft, Copy, Loader2, Trash2 } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { RelativeTime } from "@/components/relative-time";
 import { SettingCard } from "@/components/setting-card";
 import { StateTabs } from "@/components/state-tabs";
 import { StatusBadge } from "@/components/status-badge";
@@ -31,7 +32,6 @@ import {
 import { api } from "@/lib/api";
 import { buildPostgresConnectionString } from "@/lib/connection-strings";
 import { getDatabaseTargetStatus } from "@/lib/database-target-status";
-import { getTimeAgo } from "@/lib/time";
 import { copyText } from "@/lib/utils";
 import { DatabaseTableBrowser } from "./database-table-browser";
 import { RuntimeLogsPanel } from "./runtime-logs-panel";
@@ -628,7 +628,7 @@ export function DatabaseBranchPanel({
                             Created
                           </p>
                           <p className="text-neutral-200">
-                            {getTimeAgo(new Date(branch.createdAt))}
+                            <RelativeTime date={branch.createdAt} />
                           </p>
                         </div>
                       </div>

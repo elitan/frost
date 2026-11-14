@@ -12,18 +12,18 @@ import {
   Rocket,
 } from "lucide-react";
 import { toast } from "sonner";
+import { RelativeTime } from "@/components/relative-time";
 import { ServiceRuntimeIndicator } from "@/components/service-runtime-indicator";
 import { StatusNotice } from "@/components/status-notice";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDomains } from "@/hooks/use-domains";
 import { useDeployments, useDeployService } from "@/hooks/use-services";
-import type { EnvVar, Service } from "@/lib/api";
+import type { Deployment, EnvVar, Service } from "@/lib/api";
 import { api } from "@/lib/api";
 import { buildConnectionString } from "@/lib/connection-strings";
 import { getCurrentDeployment } from "@/lib/deployment-utils";
 import { getPreferredDomain } from "@/lib/service-url";
-import { getTimeAgo } from "@/lib/time";
 import { copyText } from "@/lib/utils";
 import { RuntimeMetricsCard } from "./runtime-metrics-card";
 
@@ -77,6 +77,28 @@ function InternalConnectionString({ service }: { service: Service }) {
   );
 }
 
+/**
+ * The deployments list and the service object are polled by separate queries
+ * and can briefly disagree. Prefer the polled list, but fall back to the
+ * service's own latestDeployment when it is the current, running deployment.
+ */
+function getServingDeployment(
+  service: Service,
+  deployments: Deployment[],
+): Deployment | null {
+  const fromList = getCurrentDeployment(service, deployments);
+  if (fromList) return fromList;
+  const latest = service.latestDeployment;
+  if (
+    latest &&
+    latest.id === service.currentDeploymentId &&
+    latest.status === "running"
+  ) {
+    return latest;
+  }
+  return null;
+}
+
 interface SidebarOverviewProps {
   service: Service;
 }
@@ -94,7 +116,7 @@ export function SidebarOverview({ service }: SidebarOverviewProps) {
   const preferredDomain = getPreferredDomain(domains);
 
   const { data: deployments = [] } = useDeployments(service.id);
-  const currentDeployment = getCurrentDeployment(service, deployments);
+  const currentDeployment = getServingDeployment(service, deployments);
   const latestDeployment = service.latestDeployment;
 
   const githubRepo = getGitHubRepoFromUrl(service.repoUrl);
@@ -137,6 +159,10 @@ export function SidebarOverview({ service }: SidebarOverviewProps) {
   }
 
   const visibleDeployment = currentDeployment ?? latestDeployment;
+  // The runtime indicator and the notice both derive from runtimeStatus so
+  // they can never contradict each other.
+  const isStarting = service.runtimeStatus === "starting";
+  const isOffline = service.runtimeStatus === "offline";
 
   return (
     <div className="space-y-4 ">
@@ -167,17 +193,15 @@ export function SidebarOverview({ service }: SidebarOverviewProps) {
               )}
           </div>
 
-          {!currentDeployment ? (
+          {isStarting || isOffline ? (
             <StatusNotice
-              tone={service.runtimeStatus === "starting" ? "info" : "danger"}
+              tone={isStarting ? "info" : "danger"}
               heading={
-                service.runtimeStatus === "starting"
-                  ? "Deployment in progress"
-                  : "Service offline"
+                isStarting ? "Deployment in progress" : "Service offline"
               }
               className="mb-3"
             >
-              {service.runtimeStatus === "starting"
+              {isStarting
                 ? "Latest deployment is still starting."
                 : latestDeployment.errorMessage ||
                   "No deployment is serving traffic right now."}
@@ -243,9 +267,10 @@ export function SidebarOverview({ service }: SidebarOverviewProps) {
           )}
 
           <div className="flex items-center gap-1.5 text-xs text-neutral-500">
-            <span>
-              Deployed {getTimeAgo(new Date(visibleDeployment.createdAt))}
-            </span>
+            <RelativeTime
+              date={visibleDeployment.createdAt}
+              prefix="Deployed"
+            />
             {service.deployType === "repo" && (
               <>
                 <span>on</span>

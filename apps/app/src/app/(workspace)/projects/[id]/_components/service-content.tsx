@@ -1,11 +1,11 @@
 "use client";
 
 import { GitBranch, Github, Package } from "lucide-react";
+import { RelativeTime } from "@/components/relative-time";
 import { ServiceRuntimeIndicator } from "@/components/service-runtime-indicator";
 import type { Service } from "@/lib/api";
 import { FALLBACK_ICON, getServiceIcon } from "@/lib/service-logo";
 import { getGitHubRepoFromUrl } from "@/lib/service-url";
-import { getTimeAgo } from "@/lib/time";
 
 interface ServiceContentProps {
   service: Service;
@@ -75,9 +75,7 @@ export function ServiceContent({
 
       {deployment && (
         <div className="flex items-center gap-1 text-xs text-neutral-500 mt-auto min-w-0">
-          <span className="shrink-0">
-            {getTimeAgo(new Date(deployment.createdAt))}
-          </span>
+          <RelativeTime date={deployment.createdAt} className="shrink-0" />
           {service.deployType === "repo" && (
             <>
               <span className="shrink-0">on</span>

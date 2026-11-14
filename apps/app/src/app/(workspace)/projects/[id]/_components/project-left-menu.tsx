@@ -135,7 +135,7 @@ export function ProjectLeftMenu({
   const { data: environments = [] } = useQuery(
     orpc.environments.list.queryOptions({ input: { projectId } }),
   );
-  const { data: environment } = useQuery({
+  const { data: environment, isPending: isEnvironmentPending } = useQuery({
     ...orpc.environments.get.queryOptions({ input: { envId: currentEnvId } }),
     enabled: currentEnvId.length > 0,
     refetchInterval: 2000,
@@ -295,8 +295,8 @@ export function ProjectLeftMenu({
                 const serviceIcon = getServiceIcon(service) ?? FALLBACK_ICON;
                 const url =
                   domains[service.id] ||
-                  (serverIp && service.latestDeployment?.hostPort
-                    ? `${serverIp}:${service.latestDeployment.hostPort}`
+                  (service.latestDeployment?.hostPort
+                    ? `${serverIp || "localhost"}:${service.latestDeployment.hostPort}`
                     : null);
                 const href = currentEnvId
                   ? `/projects/${projectId}/environments/${currentEnvId}/services/${service.id}`
@@ -309,7 +309,7 @@ export function ProjectLeftMenu({
                     iconSrc={serviceIcon}
                     iconFallback={FALLBACK_ICON}
                     name={service.name}
-                    subtitle={url ?? "no public url"}
+                    subtitle={url ?? "No public URL"}
                     runtimeStatus={service.runtimeStatus}
                     attentionStatus={service.attentionStatus}
                   />
@@ -357,7 +357,14 @@ export function ProjectLeftMenu({
             </div>
           )}
 
-          {!hasResources && (
+          {!hasResources && currentEnvId && isEnvironmentPending && (
+            <div className="space-y-2 px-1" aria-hidden="true">
+              <div className="h-9 rounded-md bg-neutral-900 motion-safe:animate-pulse" />
+              <div className="h-9 rounded-md bg-neutral-900 motion-safe:animate-pulse" />
+            </div>
+          )}
+
+          {!hasResources && !(currentEnvId && isEnvironmentPending) && (
             <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 text-xs text-neutral-400">
               No resources yet.
             </div>

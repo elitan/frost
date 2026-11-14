@@ -1,10 +1,16 @@
-import { GitBranch, GitCommit, RotateCcw } from "lucide-react";
+"use client";
+
+import { GitBranch, RotateCcw } from "lucide-react";
 import { DeploymentStatusIndicator } from "@/components/deployment-status-indicator";
-import { formatDuration, getTimeAgo } from "@/lib/time";
+import { RelativeTime } from "@/components/relative-time";
+import { useNow } from "@/hooks/use-now";
+import { formatDuration } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { DeploymentRef } from "./deployment-ref";
 
 interface DeploymentRowProps {
   commitSha: string;
+  deployType?: string | null;
   commitMessage?: string | null;
   gitBranch?: string | null;
   status: string;
@@ -58,6 +64,7 @@ function TriggerLabel({
 
 export function DeploymentRow({
   commitSha,
+  deployType,
   commitMessage,
   gitBranch,
   status,
@@ -74,10 +81,11 @@ export function DeploymentRow({
   isRollingBack,
   isCurrent,
 }: DeploymentRowProps) {
-  const timeAgo = getTimeAgo(new Date(createdAt));
   const duration =
     finishedAt && createdAt ? formatDuration(createdAt, finishedAt) : null;
   const inProgress = isInProgress(status);
+  // Tick every second while building so the elapsed timer stays live.
+  useNow(inProgress ? "second" : "minute");
   const elapsed = inProgress ? formatDuration(createdAt, Date.now()) : null;
 
   function handleRollback(e: React.MouseEvent) {
@@ -119,8 +127,11 @@ export function DeploymentRow({
             <TriggerLabel trigger={trigger} gitBranch={gitBranch} />
           </div>
           <div className="flex items-center gap-1.5 text-xs text-neutral-500 mt-0.5">
-            <GitCommit className="h-3 w-3" />
-            <span className="font-mono">{commitSha.slice(0, 7)}</span>
+            <DeploymentRef
+              value={commitSha}
+              deployType={deployType}
+              className="max-w-[60%] shrink-0"
+            />
             {commitMessage && (
               <span className="truncate">{commitMessage.split("\n")[0]}</span>
             )}
@@ -135,7 +146,7 @@ export function DeploymentRow({
           )}
           <div className="flex items-center gap-2 text-xs text-neutral-500">
             <span>
-              {timeAgo}
+              <RelativeTime date={createdAt} />
               {triggeredByUsername && ` by ${triggeredByUsername}`}
             </span>
             {triggeredByAvatarUrl && (
@@ -153,6 +164,7 @@ export function DeploymentRow({
                 onClick={handleRollback}
                 disabled={isRollingBack}
                 title="Rollback to this deployment"
+                aria-label="Rollback to this deployment"
                 className="p-1 rounded hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 transition-all disabled:opacity-50"
               >
                 <RotateCcw

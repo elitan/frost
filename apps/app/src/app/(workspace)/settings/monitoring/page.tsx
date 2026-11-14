@@ -5,8 +5,12 @@ import {
   useMonitoringHistory,
   useMonitoringStats,
 } from "@/hooks/use-monitoring";
+import { SettingsPageHeader } from "../_components/settings-page-header";
+import { getNavItem } from "../_components/settings-sidebar";
 import { SystemOverview } from "./_components/system-overview";
 import { TimeRangeSelector } from "./_components/time-range-selector";
+
+const navItem = getNavItem("monitoring");
 
 export default function MonitoringPage() {
   const [range, setRange] = useState("1h");
@@ -16,15 +20,11 @@ export default function MonitoringPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Monitoring</h1>
-          <p className="mt-1 text-sm text-neutral-400">
-            Real-time system metrics
-          </p>
-        </div>
-        <TimeRangeSelector value={range} onChange={setRange} />
-      </div>
+      <SettingsPageHeader
+        title={navItem.label}
+        description={navItem.description}
+        action={<TimeRangeSelector value={range} onChange={setRange} />}
+      />
 
       <SystemOverview
         snapshot={snapshot}

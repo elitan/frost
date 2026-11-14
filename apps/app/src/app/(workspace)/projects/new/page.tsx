@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { useDocumentTitle } from "@/hooks/use-document-title";
 import { useCreateProject } from "@/hooks/use-projects";
 import type { CreateProjectInput, EnvVar } from "@/lib/api";
 import { orpc } from "@/lib/orpc-client";
@@ -78,6 +79,7 @@ function TemplateInfo({ template }: TemplateInfoProps) {
 export default function NewProjectPage() {
   const router = useRouter();
   const createMutation = useCreateProject();
+  useDocumentTitle("New project");
   const [envVars, setEnvVars] = useState<EnvVar[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("");
   const nameInputRef = useRef<HTMLInputElement>(null);

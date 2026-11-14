@@ -9,7 +9,7 @@ interface AutoCleanupCardProps {
   settings: CleanupSettings;
   saving: boolean;
   demoMode?: boolean;
-  onUpdate: (updates: Partial<CleanupSettings>) => void;
+  onUpdate: (updates: Partial<CleanupSettings>) => Promise<boolean>;
 }
 
 export function AutoCleanupCard({

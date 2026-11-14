@@ -7,12 +7,20 @@ import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DeploymentStatusIndicator } from "@/components/deployment-status-indicator";
 import { EmptyState } from "@/components/empty-state";
-import { LogConnectionStatus, LogViewer } from "@/components/log-viewer";
+import {
+  LogConnectionStatus,
+  type LogStreamState,
+  LogViewer,
+} from "@/components/log-viewer";
 import { Button } from "@/components/ui/button";
 import { useBuildLogs } from "@/hooks/use-build-logs";
 import { useDeployments, useDeployService } from "@/hooks/use-services";
 import type { Deployment, Service } from "@/lib/api";
 import { orpc } from "@/lib/orpc-client";
+import {
+  DeploymentRef,
+  getDeploymentRef,
+} from "../services/[serviceId]/_components/deployment-ref";
 import { DeploymentRow } from "../services/[serviceId]/_components/deployment-row";
 
 interface SidebarDeploymentsProps {
@@ -28,17 +36,39 @@ function replicaStatusToDotStatus(
   return "pending";
 }
 
+// Build output only streams while the deployment is being built/rolled out.
+// Once it reaches a terminal status the stored log is final.
 const ACTIVE_BUILD_STATUSES = new Set([
   "pending",
   "cloning",
   "pulling",
   "building",
   "deploying",
-  "running",
 ]);
 
 function shouldStreamBuildLogs(status: string): boolean {
   return ACTIVE_BUILD_STATUSES.has(status);
+}
+
+function getBuildLogStreamState(
+  status: string,
+  isConnected: boolean,
+): LogStreamState {
+  if (!shouldStreamBuildLogs(status)) {
+    return status === "failed" ? "failed" : "finished";
+  }
+  return isConnected ? "live" : "reconnecting";
+}
+
+function describeDeploymentRef(
+  value: string | null | undefined,
+  deployType: string | null | undefined,
+): string {
+  const ref = getDeploymentRef(value, deployType);
+  if (!ref) return "this deployment";
+  return ref.kind === "image"
+    ? `image tag ${ref.label}`
+    : `commit ${ref.label}`;
 }
 
 function ReplicaStatus({ deploymentId }: { deploymentId: string }) {
@@ -142,7 +172,7 @@ export function SidebarDeployments({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-neutral-700 bg-neutral-800">
+      <div className="flex max-h-[40%] min-h-0 shrink-0 flex-col rounded-lg border border-neutral-700 bg-neutral-800">
         <div className="flex shrink-0 items-center justify-between border-b border-neutral-700 px-4 py-3">
           <span className="text-sm font-medium text-neutral-300">
             Deployments
@@ -177,7 +207,7 @@ export function SidebarDeployments({
             />
           </div>
         ) : (
-          <div className="min-h-0 flex-1 divide-y divide-neutral-700 overflow-auto">
+          <div className="min-h-0 divide-y divide-neutral-700 overflow-auto">
             {deployments.map((d) => {
               const hasVolumes = service.volumes && service.volumes !== "[]";
               const canRollback =
@@ -187,6 +217,7 @@ export function SidebarDeployments({
                 <DeploymentRow
                   key={d.id}
                   commitSha={d.commitSha}
+                  deployType={service.deployType}
                   commitMessage={d.commitMessage}
                   gitBranch={d.gitBranch}
                   status={d.status}
@@ -218,11 +249,10 @@ export function SidebarDeployments({
           if (!open && !rollbackMutation.isPending) setRollbackTarget(null);
         }}
         title="Roll back deployment?"
-        description={`This will redeploy ${
-          rollbackTarget?.commitSha
-            ? `commit ${rollbackTarget.commitSha.slice(0, 7)}`
-            : "this deployment"
-        } and replace the currently running version.`}
+        description={`This will redeploy ${describeDeploymentRef(
+          rollbackTarget?.commitSha,
+          service.deployType,
+        )} and replace the currently running version.`}
         confirmLabel="Roll back"
         loading={rollbackMutation.isPending}
         onConfirm={() => {
@@ -237,10 +267,11 @@ export function SidebarDeployments({
               <span className="text-sm font-medium text-neutral-200">Logs</span>
               <div className="flex items-center gap-2 text-xs text-neutral-500">
                 <DeploymentStatusIndicator status={selectedDeployment.status} />
-                <span className="font-mono">
-                  {selectedDeployment.commitSha?.slice(0, 7) ||
-                    selectedDeployment.id.slice(0, 7)}
-                </span>
+                <DeploymentRef
+                  value={selectedDeployment.commitSha}
+                  deployType={service.deployType}
+                  fallback={selectedDeployment.id.slice(0, 7)}
+                />
               </div>
             </div>
             {onOpenDeploymentPage && (
@@ -264,16 +295,19 @@ export function SidebarDeployments({
             )}
             <ReplicaStatus deploymentId={selectedDeployment.id} />
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-neutral-800">
-              {streamBuildLogs && (
-                <LogConnectionStatus
-                  isConnected={isConnected}
-                  className="border-b border-neutral-900 bg-neutral-950/60 px-4 py-2"
-                />
-              )}
               <LogViewer
                 logs={displayLogs}
                 error={error}
                 emptyMessage="No logs yet..."
+                defaultWrap
+                toolbarStart={
+                  <LogConnectionStatus
+                    state={getBuildLogStreamState(
+                      selectedDeployment.status,
+                      isConnected,
+                    )}
+                  />
+                }
               />
             </div>
           </div>

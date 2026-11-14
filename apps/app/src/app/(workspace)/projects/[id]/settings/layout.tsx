@@ -1,7 +1,11 @@
 "use client";
 
 import { useParams, usePathname } from "next/navigation";
+import { useRef } from "react";
+import { SettingsPageHeader } from "@/app/(workspace)/settings/_components/settings-page-header";
+import { useSaveShortcut } from "@/app/(workspace)/settings/_components/use-save-shortcut";
 import {
+  getProjectSettingsPage,
   SettingsMobileTabs,
   SettingsSidebar,
 } from "./_components/settings-sidebar";
@@ -17,6 +21,9 @@ export default function ProjectSettingsLayout({
   const pathname = usePathname();
   const parts = pathname.split("/");
   const activeSection = parts[parts.length - 1] || "general";
+  const page = getProjectSettingsPage(activeSection);
+  const contentRef = useRef<HTMLDivElement>(null);
+  useSaveShortcut(contentRef);
 
   return (
     <div className="flex flex-col gap-8 md:flex-row">
@@ -36,7 +43,10 @@ export default function ProjectSettingsLayout({
         </div>
       </aside>
 
-      <div className="flex-1">{children}</div>
+      <div ref={contentRef} className="min-w-0 max-w-4xl flex-1 space-y-6">
+        <SettingsPageHeader title={page.title} description={page.description} />
+        {children}
+      </div>
     </div>
   );
 }

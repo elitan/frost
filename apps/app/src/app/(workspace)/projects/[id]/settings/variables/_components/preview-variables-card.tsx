@@ -68,8 +68,8 @@ export function PreviewVariablesCard({ projectId }: PreviewVariablesCardProps) {
 
   return (
     <SettingCard
-      title="Preview Environment Variables"
-      description="Applied to PR preview environments instead of the project variables above. Production secrets are not copied into previews unless inheritance is enabled."
+      title="Preview Variables"
+      description="Used by pull-request preview environments instead of the project variables above."
       onSubmit={handleSave}
       footerRight={
         <Button
@@ -87,15 +87,29 @@ export function PreviewVariablesCard({ projectId }: PreviewVariablesCardProps) {
         </Button>
       }
     >
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-6 flex items-start justify-between gap-4 rounded-md border border-neutral-800 bg-neutral-800/30 p-3">
+        <div className="space-y-1">
+          <Label
+            htmlFor="preview-inherit-env-vars"
+            className="text-sm text-neutral-200"
+          >
+            Inherit project variables
+          </Label>
+          <p
+            id="preview-inherit-env-vars-hint"
+            className="text-xs text-neutral-500"
+          >
+            When on, previews also get the project variables above, with the
+            values below taking precedence.
+          </p>
+        </div>
         <Switch
           id="preview-inherit-env-vars"
           checked={inherit}
           onCheckedChange={setInherit}
+          aria-describedby="preview-inherit-env-vars-hint"
+          className="mt-0.5 shrink-0"
         />
-        <Label htmlFor="preview-inherit-env-vars" className="text-neutral-300">
-          Preview environments inherit production variables
-        </Label>
       </div>
       <EnvVarEditor
         value={envVars}

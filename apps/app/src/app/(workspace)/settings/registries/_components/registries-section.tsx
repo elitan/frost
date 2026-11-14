@@ -58,6 +58,7 @@ export function RegistriesSection() {
           password: "",
         });
         setShowForm(false);
+        toast.success("Registry added");
         await queryClient.refetchQueries({
           queryKey: orpc.registries.list.key(),
         });
@@ -73,6 +74,7 @@ export function RegistriesSection() {
   const deleteMutation = useMutation(
     orpc.registries.delete.mutationOptions({
       onSuccess: async () => {
+        toast.success("Registry deleted");
         await queryClient.refetchQueries({
           queryKey: orpc.registries.list.key(),
         });
@@ -110,6 +112,12 @@ export function RegistriesSection() {
       password: formData.password,
     });
   }
+
+  const canCreate =
+    formData.name.trim() !== "" &&
+    formData.username.trim() !== "" &&
+    formData.password.trim() !== "" &&
+    (formData.type !== "custom" || formData.url.trim() !== "");
 
   function handleCreateSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -199,6 +207,7 @@ export function RegistriesSection() {
                             })
                           }
                           disabled={demoMode}
+                          aria-label={`Delete registry ${registry.name}`}
                           className="text-red-400 hover:text-red-300"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -329,7 +338,7 @@ export function RegistriesSection() {
               <div className="flex gap-2">
                 <Button
                   type="submit"
-                  disabled={demoMode || createMutation.isPending}
+                  disabled={demoMode || createMutation.isPending || !canCreate}
                 >
                   {createMutation.isPending ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />

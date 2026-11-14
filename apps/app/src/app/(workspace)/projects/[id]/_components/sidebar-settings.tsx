@@ -1,8 +1,9 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EnvVarEditor } from "@/components/env-var-editor";
 import { SettingCard } from "@/components/setting-card";
@@ -11,6 +12,7 @@ import { useProject } from "@/hooks/use-projects";
 import { useDeployService, useUpdateService } from "@/hooks/use-services";
 import type { EnvVar, Service } from "@/lib/api";
 import { api } from "@/lib/api";
+import { orpc } from "@/lib/orpc-client";
 import { DomainsSection } from "../services/[serviceId]/_components/domains-section";
 import { BuildConfigCard } from "../services/[serviceId]/settings/_components/build-config-card";
 import { ContainerPortCard } from "../services/[serviceId]/settings/_components/container-port-card";
@@ -92,6 +94,34 @@ function ReadOnlyVar({ name, value }: ReadOnlyVarProps) {
   );
 }
 
+interface InheritedVarsCardProps {
+  title: string;
+  description: ReactNode;
+  vars: EnvVar[];
+  emptyMessage: string;
+}
+
+function InheritedVarsCard({
+  title,
+  description,
+  vars,
+  emptyMessage,
+}: InheritedVarsCardProps) {
+  return (
+    <SettingCard title={title} description={description}>
+      {vars.length > 0 ? (
+        <div className="space-y-1">
+          {vars.map((v) => (
+            <ReadOnlyVar key={v.key} name={v.key} value="••••••••" />
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-neutral-500">{emptyMessage}</p>
+      )}
+    </SettingCard>
+  );
+}
+
 function VariablesTab({
   service,
   projectId,
@@ -100,6 +130,12 @@ function VariablesTab({
   const updateMutation = useUpdateService(service.id, service.environmentId);
   const deployMutation = useDeployService(service.id, service.environmentId);
   const { data: project } = useProject(projectId);
+  const { data: environment } = useQuery({
+    ...orpc.environments.get.queryOptions({
+      input: { envId: service.environmentId },
+    }),
+    enabled: !!service.environmentId,
+  });
 
   const [envVars, setEnvVars] = useState<EnvVar[]>([]);
   const [hasValidationErrors, setHasValidationErrors] = useState(false);
@@ -140,6 +176,15 @@ function VariablesTab({
   }
 
   const projectVars = parseEnvVars(project?.envVars ?? null);
+  const previewVars = parseEnvVars(project?.previewEnvVars ?? null);
+  const isPreview = environment?.type === "preview";
+  const previewInheritsProduction = Boolean(project?.previewInheritEnvVars);
+  const projectVarsSettingsUrl = `/projects/${projectId}/settings/variables`;
+  const editLink = (
+    <a href={projectVarsSettingsUrl} className="text-blue-400 hover:underline">
+      Edit in project settings
+    </a>
+  );
 
   const frostVars = buildFrostVars(service, project?.name ?? "", projectId);
 
@@ -147,7 +192,9 @@ function VariablesTab({
     <div className="space-y-4">
       <SettingCard
         title="Service Environment Variables"
-        description="These are specific to this service (in addition to project-level vars). The PORT variable is managed by the Container Port setting in Runtime."
+        description={`These are specific to this service and override ${
+          isPreview ? "preview" : "project-level"
+        } vars. The PORT variable is managed by the Container Port setting in Runtime.`}
         onSubmit={handleSave}
         footerRight={
           <Button
@@ -173,32 +220,53 @@ function VariablesTab({
         />
       </SettingCard>
 
-      <SettingCard
-        title="Project Environment Variables"
-        description={
-          <>
-            Inherited from project settings.{" "}
-            <a
-              href={`/projects/${projectId}/settings/variables`}
-              className="text-blue-400 hover:underline"
-            >
-              Edit in project settings
-            </a>
-          </>
-        }
-      >
-        {projectVars.length > 0 ? (
-          <div className="space-y-1">
-            {projectVars.map((v) => (
-              <ReadOnlyVar key={v.key} name={v.key} value="••••••••" />
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-neutral-500">
-            No project environment variables configured
-          </p>
-        )}
-      </SettingCard>
+      {environment && isPreview ? (
+        <>
+          <InheritedVarsCard
+            title="Preview Environment Variables"
+            description={
+              <>
+                Inherited from the project&apos;s preview variables. {editLink}
+              </>
+            }
+            vars={previewVars}
+            emptyMessage="No preview environment variables configured"
+          />
+          {previewInheritsProduction ? (
+            <InheritedVarsCard
+              title="Production Environment Variables"
+              description={
+                <>
+                  Inherited because preview environments inherit production
+                  variables. Preview variables take precedence. {editLink}
+                </>
+              }
+              vars={projectVars}
+              emptyMessage="No project environment variables configured"
+            />
+          ) : (
+            <p className="px-1 text-xs text-neutral-500">
+              Production project variables are not inherited by preview
+              environments. Enable &ldquo;Preview environments inherit
+              production variables&rdquo; in{" "}
+              <a
+                href={projectVarsSettingsUrl}
+                className="text-blue-400 hover:underline"
+              >
+                project settings
+              </a>{" "}
+              to include them.
+            </p>
+          )}
+        </>
+      ) : environment ? (
+        <InheritedVarsCard
+          title="Project Environment Variables"
+          description={<>Inherited from project settings. {editLink}</>}
+          vars={projectVars}
+          emptyMessage="No project environment variables configured"
+        />
+      ) : null}
 
       <SettingCard
         title="Frost Environment Variables"

@@ -245,7 +245,7 @@ export function SslSection() {
               placeholder="frost.example.com"
               aria-invalid={Boolean(domainError)}
               disabled={demoMode}
-              className="h-10 border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
+              className="border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
             />
             <Button
               variant="secondary"
@@ -298,7 +298,7 @@ export function SslSection() {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="admin@example.com"
             disabled={demoMode}
-            className="h-10 border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
+            className="border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
           />
           <p className="text-xs text-neutral-500">
             Used for Let's Encrypt certificate notifications

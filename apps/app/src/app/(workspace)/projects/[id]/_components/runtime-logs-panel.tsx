@@ -27,17 +27,21 @@ export function RuntimeLogsPanel({
 }: RuntimeLogsPanelProps) {
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
-      <div className="mb-3 flex items-center gap-2">
-        {headerPrefix}
-        <LogConnectionStatus isConnected={isConnected} />
-        {headerSuffix ? <div className="ml-auto">{headerSuffix}</div> : null}
-      </div>
-
       <LogViewer
         logs={logs}
         error={error}
         emptyMessage={emptyMessage}
-        className={viewerClassName}
+        className={cn(
+          "overflow-hidden rounded-lg border border-neutral-800",
+          viewerClassName,
+        )}
+        toolbarStart={
+          <>
+            {headerPrefix}
+            <LogConnectionStatus isConnected={isConnected} />
+          </>
+        }
+        toolbarEnd={headerSuffix}
       />
     </div>
   );

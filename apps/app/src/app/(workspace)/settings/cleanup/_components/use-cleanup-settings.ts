@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useDemoMode } from "@/hooks/use-demo-mode";
 import { orpc } from "@/lib/orpc-client";
 
@@ -51,8 +52,8 @@ export function useCleanupSettings() {
     ? {
         enabled: data.enabled,
         keepImages: data.retentionDays,
-        pruneDangling: true,
-        pruneNetworks: true,
+        pruneDangling: data.pruneDangling,
+        pruneNetworks: data.pruneNetworks,
         running: runStatusData?.running ?? data.running,
         lastRun: runStatusData?.lastRun ?? data.lastRun,
         lastResult:
@@ -82,12 +83,27 @@ export function useCleanupSettings() {
     }),
   );
 
-  function updateSetting(updates: Partial<CleanupSettings>): void {
-    if (demoMode) return;
-    updateMutation.mutate({
-      enabled: updates.enabled,
-      retentionDays: updates.keepImages,
-    });
+  async function updateSetting(
+    updates: Partial<CleanupSettings>,
+  ): Promise<boolean> {
+    if (demoMode) return false;
+    try {
+      await updateMutation.mutateAsync({
+        enabled: updates.enabled,
+        retentionDays: updates.keepImages,
+        pruneDangling: updates.pruneDangling,
+        pruneNetworks: updates.pruneNetworks,
+      });
+      toast.success("Cleanup settings saved");
+      return true;
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message
+          ? err.message
+          : "Failed to save cleanup settings",
+      );
+      return false;
+    }
   }
 
   async function runCleanup(): Promise<void> {

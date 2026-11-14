@@ -12,7 +12,7 @@ export function SessionSection() {
   return (
     <SettingCard
       title="Session"
-      description="You are currently signed in. Sign out to end your session and return to the login page."
+      description="End your session on this device."
       footerRight={
         <Button variant="outline" onClick={handleSignOut}>
           Sign out
@@ -20,8 +20,7 @@ export function SessionSection() {
       }
     >
       <p className="text-sm text-neutral-400">
-        Signing out will clear your session. You'll need to enter the install
-        password to sign back in.
+        You'll need your Frost password to sign back in.
       </p>
     </SettingCard>
   );

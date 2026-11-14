@@ -9,7 +9,7 @@ interface PruneDanglingCardProps {
   settings: CleanupSettings;
   saving: boolean;
   demoMode?: boolean;
-  onUpdate: (updates: Partial<CleanupSettings>) => void;
+  onUpdate: (updates: Partial<CleanupSettings>) => Promise<boolean>;
 }
 
 export function PruneDanglingCard({
@@ -33,7 +33,7 @@ export function PruneDanglingCard({
           disabled={saving || demoMode}
         />
         <Label htmlFor="prune-dangling" className="text-neutral-300">
-          Enable dangling image cleanup
+          Remove dangling images during cleanup
         </Label>
       </div>
     </SettingCard>

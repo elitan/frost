@@ -7,7 +7,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Frost",
+  title: { default: "Frost", template: "%s · Frost" },
   description:
     "Open Source Alternative to Vercel, Netlify, Railway, Render and Neon.",
 };

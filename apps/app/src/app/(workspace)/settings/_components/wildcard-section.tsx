@@ -33,7 +33,6 @@ export function WildcardSection() {
   const [apiToken, setApiToken] = useState("");
   const [tokenValid, setTokenValid] = useState<boolean | null>(null);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
   const [showRemoveDialog, setShowRemoveDialog] = useState(false);
   const domainError = getDomainNameValidationError(domain);
@@ -76,7 +75,9 @@ export function WildcardSection() {
             duration: 10000,
           });
         }
-        setSuccess(true);
+        toast.success("Wildcard domain saved", {
+          description: "New services will get subdomains automatically.",
+        });
         setApiToken("");
         await queryClient.refetchQueries({
           queryKey: orpc.settings.wildcard.get.key(),
@@ -100,6 +101,7 @@ export function WildcardSection() {
           });
         }
         setShowRemoveDialog(false);
+        toast.success("Wildcard domain removed");
         setDomain("");
         setApiToken("");
         setTokenValid(null);
@@ -132,7 +134,6 @@ export function WildcardSection() {
       return;
     }
     setError("");
-    setSuccess(false);
     saveMutation.mutate({
       wildcardDomain: normalizeDomainName(domain),
       dnsProvider: "cloudflare",
@@ -207,13 +208,6 @@ export function WildcardSection() {
             </StatusNotice>
           )}
 
-          {success && (
-            <StatusNotice tone="success">
-              Wildcard domain configured successfully! New services will
-              automatically get subdomains.
-            </StatusNotice>
-          )}
-
           {settings?.serverIp && (
             <div className="flex items-center gap-2 rounded-md bg-neutral-800/50 p-3">
               <span className="text-sm text-neutral-400">Your server IP:</span>
@@ -253,7 +247,7 @@ export function WildcardSection() {
               placeholder="apps.example.com"
               aria-invalid={Boolean(domainError)}
               disabled={demoMode || Boolean(config?.configured)}
-              className="h-10 border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
+              className="border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
             />
             {domainError && (
               <p className="text-sm text-red-400">{domainError}</p>
@@ -272,7 +266,7 @@ export function WildcardSection() {
               id="dns-provider"
               value="Cloudflare"
               disabled
-              className="h-10 border-neutral-800 bg-neutral-800 text-neutral-400"
+              className="border-neutral-800 bg-neutral-800 text-neutral-400"
             />
             <p className="text-xs text-neutral-500">
               More providers coming soon
@@ -295,7 +289,7 @@ export function WildcardSection() {
                   }}
                   disabled={demoMode}
                   placeholder="Enter your Cloudflare API token"
-                  className="h-10 border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
+                  className="border-neutral-800 bg-neutral-900 text-white placeholder:text-neutral-600 focus-visible:ring-neutral-700"
                 />
                 <Button
                   type="button"

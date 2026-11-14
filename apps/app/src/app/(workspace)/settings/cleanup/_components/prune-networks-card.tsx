@@ -9,7 +9,7 @@ interface PruneNetworksCardProps {
   settings: CleanupSettings;
   saving: boolean;
   demoMode?: boolean;
-  onUpdate: (updates: Partial<CleanupSettings>) => void;
+  onUpdate: (updates: Partial<CleanupSettings>) => Promise<boolean>;
 }
 
 export function PruneNetworksCard({
@@ -33,7 +33,7 @@ export function PruneNetworksCard({
           disabled={saving || demoMode}
         />
         <Label htmlFor="prune-networks" className="text-neutral-300">
-          Enable unused network cleanup
+          Remove unused networks during cleanup
         </Label>
       </div>
     </SettingCard>

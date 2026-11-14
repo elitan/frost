@@ -64,10 +64,10 @@ export default function ProjectVariablesPage() {
   if (!project) return null;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <SettingCard
-        title="Project Environment Variables"
-        description="These environment variables are inherited by all services in this project."
+        title="Project Variables"
+        description="Inherited by every service in this project's environments. Service variables override them."
         learnMoreUrl="/docs/guides/env-vars"
         learnMoreText="Learn more about environment variables"
         onSubmit={handleSave}

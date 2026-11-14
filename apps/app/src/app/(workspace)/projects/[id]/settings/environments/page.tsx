@@ -97,7 +97,7 @@ export default function EnvironmentsSettingsPage() {
     <div className="space-y-6">
       <SettingCard
         title="Environments"
-        description="Manage your project environments. Each environment has isolated services and configuration."
+        description="Each environment has its own isolated services and configuration. The production environment can be renamed but not deleted."
       >
         <div className="space-y-2">
           {environments.map((env) => (
@@ -118,6 +118,8 @@ export default function EnvironmentsSettingsPage() {
                   variant="ghost"
                   size="sm"
                   onClick={() => handleEditClick(env)}
+                  aria-label={`Rename ${env.name}`}
+                  title="Rename"
                 >
                   <Pencil className="h-4 w-4" />
                 </Button>
@@ -126,6 +128,8 @@ export default function EnvironmentsSettingsPage() {
                     variant="ghost"
                     size="sm"
                     onClick={() => setDeletingEnv(env)}
+                    aria-label={`Delete ${env.name}`}
+                    title="Delete"
                     className="text-red-400 hover:text-red-300"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -176,7 +180,7 @@ export default function EnvironmentsSettingsPage() {
                 type="submit"
                 disabled={
                   !newName.trim() ||
-                  newName === editingEnv?.name ||
+                  newName.trim() === editingEnv?.name ||
                   updateMutation.isPending
                 }
               >

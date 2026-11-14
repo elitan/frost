@@ -5,6 +5,7 @@ import { Layers, Plus, Sparkles } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useMemo } from "react";
 import { EmptyState } from "@/components/empty-state";
+import { ResourceGridSkeleton } from "@/components/skeletons";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useDatabases } from "@/hooks/use-databases";
@@ -125,13 +126,7 @@ export default function ProjectStartPage() {
   }
 
   if (isLoading) {
-    return (
-      <Card className="border-neutral-800 bg-neutral-900">
-        <CardContent className="py-10 text-center text-sm text-neutral-400">
-          Loading resources...
-        </CardContent>
-      </Card>
-    );
+    return <ResourceGridSkeleton />;
   }
 
   if (environments.length === 0) {

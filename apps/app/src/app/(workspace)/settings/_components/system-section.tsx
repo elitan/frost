@@ -3,9 +3,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowUpCircle,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Circle,
   Loader2,
   RefreshCw,
   XCircle,
@@ -13,12 +15,73 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DemoModeAlert } from "@/components/demo-mode-alert";
+import { RelativeTime } from "@/components/relative-time";
 import { SettingCard } from "@/components/setting-card";
 import { StatusNotice } from "@/components/status-notice";
 import { Button } from "@/components/ui/button";
 import { useDemoMode } from "@/hooks/use-demo-mode";
 import { orpc } from "@/lib/orpc-client";
-import { formatDateTime } from "@/lib/time";
+
+type CheckState =
+  | "loading"
+  | "checking"
+  | "unchecked"
+  | "latest"
+  | "available"
+  | "error";
+
+const PILL_STYLES: Record<CheckState, string> = {
+  loading: "border-neutral-800 text-neutral-500",
+  checking: "border-neutral-700 text-neutral-300",
+  unchecked: "border-neutral-700 text-neutral-400",
+  latest: "border-green-900/60 bg-green-900/20 text-green-400",
+  available: "border-blue-900/60 bg-blue-900/20 text-blue-400",
+  error: "border-red-900/60 bg-red-900/20 text-red-400",
+};
+
+function UpdateStatusPill({ state }: { state: CheckState }) {
+  const content: Record<CheckState, React.ReactNode> = {
+    loading: <span className="w-16" />,
+    checking: (
+      <>
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Checking for updates…
+      </>
+    ),
+    unchecked: (
+      <>
+        <Circle className="h-3.5 w-3.5" />
+        Not checked yet
+      </>
+    ),
+    latest: (
+      <>
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        Up to date
+      </>
+    ),
+    available: (
+      <>
+        <ArrowUpCircle className="h-3.5 w-3.5" />
+        Update available
+      </>
+    ),
+    error: (
+      <>
+        <XCircle className="h-3.5 w-3.5" />
+        Check failed
+      </>
+    ),
+  };
+
+  return (
+    <output
+      className={`inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs font-medium ${PILL_STYLES[state]}`}
+    >
+      {content[state]}
+    </output>
+  );
+}
 
 type UpdateState = "idle" | "preparing" | "restarting" | "success" | "failed";
 
@@ -65,8 +128,12 @@ export function SystemSection() {
       onSuccess: async () => {
         await queryClient.refetchQueries({ queryKey: orpc.updates.get.key() });
       },
-      onError: () => {
-        setError("Failed to check for updates");
+      onError: (err) => {
+        setError(
+          err instanceof Error && err.message
+            ? `Couldn't check for updates: ${err.message}`
+            : "Couldn't check for updates",
+        );
       },
     }),
   );
@@ -158,6 +225,14 @@ export function SystemSection() {
     schedule();
   }
 
+  // Never checked: check once automatically so the status is meaningful.
+  const autoCheckedRef = useRef(false);
+  useEffect(() => {
+    if (!status || status.lastCheck || autoCheckedRef.current) return;
+    autoCheckedRef.current = true;
+    checkMutation.mutate({});
+  }, [status, checkMutation]);
+
   async function handleCheck() {
     setError("");
     checkMutation.mutate({});
@@ -182,24 +257,24 @@ export function SystemSection() {
     setPreviousVersion(null);
   }
 
-  function formatLastCheck(timestamp: string | null): string {
-    if (!timestamp) return "Never";
-    const diff = Date.now() - new Date(timestamp).getTime();
-    const minutes = Math.floor(diff / 60000);
-    if (minutes < 1) return "Just now";
-    if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
-    return formatDateTime(timestamp);
-  }
-
   const isUpdating =
     updateState === "preparing" || updateState === "restarting";
 
   return (
     <SettingCard
       title="System"
-      description="Check for updates and manage your Frost installation."
+      description="The Frost version you're running and available updates."
+      footerLeft={
+        updateState === "idle" ? (
+          <span className="text-sm text-neutral-500">
+            {status?.lastCheck ? (
+              <RelativeTime date={status.lastCheck} prefix="Checked" />
+            ) : status ? (
+              "Not checked yet"
+            ) : null}
+          </span>
+        ) : undefined
+      }
       footer={
         updateState === "success" || updateState === "failed" ? (
           <Button variant="secondary" onClick={handleDismiss}>
@@ -216,7 +291,7 @@ export function SystemSection() {
                 {updateState === "preparing" ? "Preparing..." : "Restarting..."}
               </>
             ) : (
-              "Update Now"
+              "Update now"
             )}
           </Button>
         ) : (
@@ -233,7 +308,7 @@ export function SystemSection() {
             ) : (
               <>
                 <RefreshCw className="mr-1.5 h-4 w-4" />
-                Check for Updates
+                Check for updates
               </>
             )}
           </Button>
@@ -320,31 +395,28 @@ export function SystemSection() {
 
         {updateState === "idle" && (
           <>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <p className="text-sm text-neutral-400">Current Version</p>
-                <p className="text-lg font-medium text-neutral-100">
-                  v{status?.currentVersion || "..."}
+                <p className="text-sm text-neutral-400">Current version</p>
+                <p className="mt-1 h-7 font-mono text-lg font-medium text-neutral-100">
+                  {status?.currentVersion ? `v${status.currentVersion}` : ""}
                 </p>
               </div>
-              <div className="flex items-center gap-1.5">
-                <p className="text-xs text-neutral-500">
-                  Last checked: {formatLastCheck(status?.lastCheck ?? null)}
-                </p>
-                <button
-                  type="button"
-                  onClick={handleCheck}
-                  disabled={checkMutation.isPending}
-                  className="text-neutral-500 hover:text-neutral-300 disabled:opacity-50"
-                  title="Check for updates"
-                >
-                  {checkMutation.isPending ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-3 w-3" />
-                  )}
-                </button>
-              </div>
+              <UpdateStatusPill
+                state={
+                  checkMutation.isPending
+                    ? "checking"
+                    : error
+                      ? "error"
+                      : !status
+                        ? "loading"
+                        : status.updateAvailable
+                          ? "available"
+                          : status.lastCheck
+                            ? "latest"
+                            : "unchecked"
+                }
+              />
             </div>
 
             {status?.updateAvailable && status.latestVersion && (
@@ -364,16 +436,11 @@ export function SystemSection() {
               </StatusNotice>
             )}
 
-            {status && !status.updateAvailable && (
-              <StatusNotice
-                tone="success"
-                icon={<CheckCircle2 className="h-4 w-4" />}
-              >
-                <span>You're running the latest version</span>
-              </StatusNotice>
+            {error && (
+              <p role="alert" className="text-sm text-red-400">
+                {error}
+              </p>
             )}
-
-            {error && <p className="text-sm text-red-400">{error}</p>}
           </>
         )}
       </div>
