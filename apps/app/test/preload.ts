@@ -10,3 +10,7 @@ if (!process.env.FROST_TEST_KEEP_DATA_DIR) {
   process.env.FROST_DATA_DIR = dataDir;
   delete process.env.FROST_DB_PATH;
 }
+
+// Every test file gets a fully migrated schema regardless of run order.
+const { runMigrations } = await import("../src/lib/migrate");
+runMigrations();
