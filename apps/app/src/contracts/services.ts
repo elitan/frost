@@ -64,7 +64,7 @@ export const servicesContract = {
     .input(
       z.object({
         serviceId: z.string(),
-        name: z.string().optional(),
+        name: z.string().min(1).optional(),
         hostname: z
           .string()
           .regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/)

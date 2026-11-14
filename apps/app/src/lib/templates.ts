@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { nanoid } from "nanoid";
@@ -226,9 +227,7 @@ export function getDatabaseTemplates(): Template[] {
 }
 
 function randomBase64(bytes: number): string {
-  return Buffer.from(
-    Array.from({ length: bytes }, () => Math.floor(Math.random() * 256)),
-  ).toString("base64");
+  return randomBytes(bytes).toString("base64");
 }
 
 export function generateCredential(

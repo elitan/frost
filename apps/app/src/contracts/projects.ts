@@ -73,7 +73,7 @@ export const projectsContract = {
     .input(
       z.object({
         projectId: z.string(),
-        name: z.string().optional(),
+        name: z.string().min(1).optional(),
         envVars: z.array(envVarSchema).optional(),
       }),
     )

@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { encrypt } from "@/lib/crypto";
+import { decrypt, encrypt } from "@/lib/crypto";
 import { db } from "@/lib/db";
 import { dockerLogin, getRegistryUrl } from "@/lib/docker";
 import { newRegistryId } from "@/lib/id";
@@ -79,14 +79,13 @@ export const registries = {
       throw new ORPCError("NOT_FOUND", { message: "Registry not found" });
     }
 
-    if (input.password) {
+    const usernameChanged =
+      !!input.username && input.username !== existing.username;
+    if (input.password || usernameChanged) {
       const registryUrl = getRegistryUrl(existing.type, existing.url);
-      const username = input.username ?? existing.username;
-      const loginResult = await dockerLogin(
-        registryUrl,
-        username,
-        input.password,
-      );
+      const username = input.username || existing.username;
+      const password = input.password || decrypt(existing.passwordEncrypted);
+      const loginResult = await dockerLogin(registryUrl, username, password);
       if (!loginResult.success) {
         throw new ORPCError("BAD_REQUEST", {
           message: `Invalid registry credentials: ${loginResult.error}`,

@@ -10,13 +10,21 @@ import {
   type UserFacingServiceType,
 } from "@/lib/service-visibility";
 import { createService } from "@/lib/services";
-import { slugify } from "@/lib/slugify";
+import { slugifyWithFallback } from "@/lib/slugify";
 import {
   assertDemoDeployRateLimit,
   assertDemoEnvironmentCreateAllowed,
   assertDemoServiceCreateAllowed,
 } from "./demo-guards";
 import { os } from "./orpc";
+
+function loadEnvironment(id: string) {
+  return db
+    .selectFrom("environments")
+    .selectAll()
+    .where("id", "=", id)
+    .executeTakeFirst();
+}
 
 export const environments = {
   list: os.environments.list.handler(async ({ input }) => {
@@ -94,81 +102,106 @@ export const environments = {
       .execute();
 
     let shouldDeploy = false;
+    let environment: NonNullable<Awaited<ReturnType<typeof loadEnvironment>>>;
 
-    if (input.cloneFromEnvironmentId) {
-      const sourceEnv = await db
-        .selectFrom("environments")
-        .select("id")
-        .where("id", "=", input.cloneFromEnvironmentId)
-        .where("projectId", "=", input.projectId)
-        .executeTakeFirst();
+    try {
+      if (input.cloneFromEnvironmentId) {
+        const sourceEnv = await db
+          .selectFrom("environments")
+          .select("id")
+          .where("id", "=", input.cloneFromEnvironmentId)
+          .where("projectId", "=", input.projectId)
+          .executeTakeFirst();
 
-      if (sourceEnv) {
-        const sourceServices = await db
-          .selectFrom("services")
-          .selectAll()
-          .where("environmentId", "=", sourceEnv.id)
-          .where("serviceType", "in", USER_FACING_SERVICE_TYPES)
-          .execute();
+        if (sourceEnv) {
+          const sourceServices = await db
+            .selectFrom("services")
+            .selectAll()
+            .where("environmentId", "=", sourceEnv.id)
+            .where("serviceType", "in", USER_FACING_SERVICE_TYPES)
+            .execute();
 
-        await assertDemoServiceCreateAllowed(id, sourceServices.length);
+          await assertDemoServiceCreateAllowed(id, sourceServices.length);
 
-        const projectHostname = project.hostname ?? slugify(project.name);
-        const envName = slugify(input.name);
+          const projectHostname =
+            project.hostname ?? slugifyWithFallback(project.name, "project");
+          const envName = slugifyWithFallback(input.name, "env");
 
-        for (const service of sourceServices) {
-          const hostname = service.hostname ?? slugify(service.name);
-          const envVars = service.envVars
-            ? (JSON.parse(service.envVars) as { key: string; value: string }[])
-            : [];
-          const volumes = service.volumes
-            ? (JSON.parse(service.volumes) as { name: string; path: string }[])
-            : [];
+          for (const service of sourceServices) {
+            const hostname =
+              service.hostname ?? slugifyWithFallback(service.name, "service");
+            const envVars = service.envVars
+              ? (JSON.parse(service.envVars) as {
+                  key: string;
+                  value: string;
+                }[])
+              : [];
+            const volumes = service.volumes
+              ? (JSON.parse(service.volumes) as {
+                  name: string;
+                  path: string;
+                }[])
+              : [];
 
-          await createService({
-            environmentId: id,
-            name: service.name,
-            hostname,
-            deployType: service.deployType as "repo" | "image",
-            serviceType: service.serviceType as UserFacingServiceType,
-            repoUrl: service.repoUrl,
-            branch: service.branch,
-            dockerfilePath: service.dockerfilePath,
-            buildContext: service.buildContext,
-            imageUrl: service.imageUrl,
-            envVars,
-            containerPort: service.containerPort,
-            healthCheckPath: service.healthCheckPath,
-            healthCheckTimeout: service.healthCheckTimeout,
-            memoryLimit: service.memoryLimit,
-            cpuLimit: service.cpuLimit,
-            shutdownTimeout: service.shutdownTimeout,
-            registryId: service.registryId,
-            command: service.command,
-            volumes,
-            wildcardDomain: { projectHostname, environmentName: envName },
-          });
-        }
+            await createService({
+              environmentId: id,
+              name: service.name,
+              hostname,
+              deployType: service.deployType as "repo" | "image",
+              serviceType: service.serviceType as UserFacingServiceType,
+              repoUrl: service.repoUrl,
+              branch: service.branch,
+              dockerfilePath: service.dockerfilePath,
+              buildContext: service.buildContext,
+              imageUrl: service.imageUrl,
+              envVars,
+              containerPort: service.containerPort,
+              healthCheckPath: service.healthCheckPath,
+              healthCheckTimeout: service.healthCheckTimeout,
+              memoryLimit: service.memoryLimit,
+              cpuLimit: service.cpuLimit,
+              shutdownTimeout: service.shutdownTimeout,
+              registryId: service.registryId,
+              command: service.command,
+              volumes,
+              drainTimeout: service.drainTimeout,
+              requestTimeout: service.requestTimeout,
+              replicaCount: service.replicaCount,
+              autoDeploy: Boolean(service.autoDeploy),
+              frostFilePath: service.frostFilePath,
+              icon: service.icon,
+              wildcardDomain: { projectHostname, environmentName: envName },
+            });
+          }
 
-        if (sourceServices.length > 0) {
-          shouldDeploy = true;
+          if (sourceServices.length > 0) {
+            shouldDeploy = true;
+          }
         }
       }
+
+      const created = await loadEnvironment(id);
+
+      if (!created) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: "Failed to create environment",
+        });
+      }
+
+      environment = created;
+
+      await ensureEnvironmentPostgresNetworkAccess(id);
+    } catch (error) {
+      try {
+        await cleanupEnvironment({ id, projectId: input.projectId });
+      } catch (cleanupError) {
+        console.error(
+          `Failed to clean up environment ${id} after create error:`,
+          cleanupError,
+        );
+      }
+      throw error;
     }
-
-    const environment = await db
-      .selectFrom("environments")
-      .selectAll()
-      .where("id", "=", id)
-      .executeTakeFirst();
-
-    if (!environment) {
-      throw new ORPCError("INTERNAL_SERVER_ERROR", {
-        message: "Failed to create environment",
-      });
-    }
-
-    await ensureEnvironmentPostgresNetworkAccess(id);
 
     if (shouldDeploy) {
       deployEnvironment(id).catch(console.error);

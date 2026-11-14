@@ -16,7 +16,7 @@ import {
   USER_FACING_SERVICE_TYPES,
 } from "@/lib/service-visibility";
 import { createService } from "@/lib/services";
-import { slugify } from "@/lib/slugify";
+import { slugifyWithFallback } from "@/lib/slugify";
 import { getTemplate, resolveTemplateServices } from "@/lib/templates";
 import { buildVolumeName, getVolumeSize } from "@/lib/volumes";
 import {
@@ -25,6 +25,17 @@ import {
   assertDemoServiceCreateAllowed,
 } from "./demo-guards";
 import { os } from "./orpc";
+
+async function assertRegistryExists(registryId: string): Promise<void> {
+  const registry = await db
+    .selectFrom("registries")
+    .select("id")
+    .where("id", "=", registryId)
+    .executeTakeFirst();
+  if (!registry) {
+    throw new ORPCError("BAD_REQUEST", { message: "Registry not found" });
+  }
+}
 
 function assertUserService(service: { serviceType: ServiceType }): void {
   if (!isUserFacingServiceType(service.serviceType)) {
@@ -115,7 +126,8 @@ export const services = {
       });
     }
 
-    const hostname = input.hostname ?? slugify(input.name);
+    const hostname =
+      input.hostname ?? slugifyWithFallback(input.name, "service");
 
     const existingHostname = await db
       .selectFrom("services")
@@ -130,9 +142,16 @@ export const services = {
       });
     }
 
-    const projectHostname = project.hostname ?? slugify(project.name);
+    const projectHostname =
+      project.hostname ?? slugifyWithFallback(project.name, "project");
     const envName =
-      environment.type === "production" ? undefined : slugify(environment.name);
+      environment.type === "production"
+        ? undefined
+        : slugifyWithFallback(environment.name, "env");
+
+    if (input.deployType === "image" && input.registryId) {
+      await assertRegistryExists(input.registryId);
+    }
 
     let service: Selectable<Services>;
 
@@ -221,6 +240,38 @@ export const services = {
       replicaCount: input.replicaCount,
     });
 
+    if (input.name !== undefined && input.name !== service.name) {
+      const existingName = await db
+        .selectFrom("services")
+        .select("id")
+        .where("environmentId", "=", service.environmentId)
+        .where("name", "=", input.name)
+        .where("id", "!=", input.serviceId)
+        .executeTakeFirst();
+
+      if (existingName) {
+        throw new ORPCError("CONFLICT", {
+          message: "Service with this name already exists in environment",
+        });
+      }
+    }
+
+    if (input.registryId) {
+      await assertRegistryExists(input.registryId);
+    }
+
+    const nextVolumes =
+      input.volumes ??
+      (service.volumes
+        ? (JSON.parse(service.volumes) as { name: string; path: string }[])
+        : []);
+    const nextReplicas = input.replicaCount ?? service.replicaCount;
+    if (nextReplicas > 1 && nextVolumes.length > 0) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: "Cannot use replicas with volumes",
+      });
+    }
+
     if (input.hostname !== undefined) {
       const existingHostname = await db
         .selectFrom("services")
@@ -278,14 +329,6 @@ export const services = {
       updates.frostFilePath = input.frostFilePath;
     }
     if (input.replicaCount !== undefined) {
-      if (input.replicaCount > 1) {
-        const volumes = service.volumes;
-        if (volumes && volumes !== "[]") {
-          throw new ORPCError("BAD_REQUEST", {
-            message: "Cannot use replicas with volumes",
-          });
-        }
-      }
       updates.replicaCount = input.replicaCount;
     }
 
@@ -452,9 +495,12 @@ export const services = {
       return `${baseName}-${counter}`;
     }
 
-    const projectHostname = project.hostname ?? slugify(project.name);
+    const projectHostname =
+      project.hostname ?? slugifyWithFallback(project.name, "project");
     const envName =
-      environment.type === "production" ? undefined : slugify(environment.name);
+      environment.type === "production"
+        ? undefined
+        : slugifyWithFallback(environment.name, "env");
 
     const usedNames = new Set(existingNames);
     const usedHostnames = new Set(existingHostnames);
@@ -470,7 +516,7 @@ export const services = {
       });
 
       const uniqueName = generateUniqueName(svc.name, usedNames);
-      const hostname = slugify(uniqueName);
+      const hostname = slugifyWithFallback(uniqueName, "service");
       const uniqueHostname = generateUniqueName(hostname, usedHostnames);
 
       usedNames.add(uniqueName);

@@ -15,7 +15,7 @@ import { listObjectStoragesByProject } from "@/lib/object-storage";
 import { getProjectResourceSummary } from "@/lib/project-resource-summary";
 import { USER_FACING_SERVICE_TYPES } from "@/lib/service-visibility";
 import { createService } from "@/lib/services";
-import { slugify } from "@/lib/slugify";
+import { slugifyWithFallback } from "@/lib/slugify";
 import {
   getManagedTemplateDatabases,
   getTemplate,
@@ -218,7 +218,7 @@ export const projects = {
 
     const id = newProjectId();
     const now = Date.now();
-    const hostname = slugify(input.name);
+    const hostname = slugifyWithFallback(input.name, "project");
 
     await db
       .insertInto("projects")
@@ -257,6 +257,7 @@ export const projects = {
     }
 
     if (template) {
+      const createdServiceIds: string[] = [];
       try {
         const excludedServices = managedTemplateDatabases.map(
           function getName(database) {
@@ -298,7 +299,7 @@ export const projects = {
         );
 
         for (const svc of resolvedTemplateServices) {
-          const serviceHostname = slugify(svc.name);
+          const serviceHostname = slugifyWithFallback(svc.name, "service");
 
           const service = await createService({
             environmentId: envId,
@@ -318,13 +319,17 @@ export const projects = {
             wildcardDomain: { projectHostname: hostname },
           });
 
-          deployService(service.id).catch((err) => {
-            console.error(`Auto-deploy failed for service ${service.id}:`, err);
-          });
+          createdServiceIds.push(service.id);
         }
       } catch (error) {
         await cleanupProject(id);
         throw error;
+      }
+
+      for (const serviceId of createdServiceIds) {
+        deployService(serviceId).catch((err) => {
+          console.error(`Auto-deploy failed for service ${serviceId}:`, err);
+        });
       }
     }
 

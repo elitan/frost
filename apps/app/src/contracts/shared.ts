@@ -2,7 +2,15 @@ import { z } from "zod";
 import { deploymentsSchema, servicesSchema } from "@/lib/db-schemas";
 
 export const envVarSchema = z.object({
-  key: z.string(),
+  key: z
+    .string()
+    .trim()
+    .min(1)
+    .max(256)
+    .regex(
+      /^[^=\s\0]+$/,
+      "Env var key must not contain '=', whitespace or NUL",
+    ),
   value: z.string(),
 });
 

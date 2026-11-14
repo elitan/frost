@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { slugify } from "./slugify";
+import { slugify, slugifyWithFallback } from "./slugify";
 
 describe("slugify", () => {
   test("converts to lowercase", () => {
@@ -68,5 +68,18 @@ describe("slugify", () => {
     expect(slugify("my café app")).toBe("my-caf-app");
     expect(slugify("über-service")).toBe("ber-service");
     expect(slugify("app-日本")).toBe("app");
+  });
+});
+
+describe("slugifyWithFallback", () => {
+  test("returns the slug when non-empty", () => {
+    expect(slugifyWithFallback("My App", "svc")).toBe("my-app");
+  });
+
+  test("falls back to prefix and stable suffix when slug is empty", () => {
+    const a = slugifyWithFallback("🚀", "svc");
+    expect(a).toMatch(/^svc-[a-z0-9]{6}$/);
+    expect(slugifyWithFallback("🚀", "svc")).toBe(a);
+    expect(slugifyWithFallback("日本語", "svc")).not.toBe(a);
   });
 });

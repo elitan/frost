@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { volumeConfigSchema } from "./shared";
+import { envVarSchema, volumeConfigSchema } from "./shared";
 
 describe("volumeConfigSchema", () => {
   test("accepts valid names", () => {
@@ -27,5 +27,19 @@ describe("volumeConfigSchema", () => {
     expect(
       volumeConfigSchema.safeParse({ name: "data", path: "data" }).success,
     ).toBe(false);
+  });
+});
+
+describe("envVarSchema", () => {
+  test("accepts and trims valid keys", () => {
+    const result = envVarSchema.safeParse({ key: "  API_KEY ", value: "x" });
+    expect(result.success).toBe(true);
+    expect(result.data?.key).toBe("API_KEY");
+  });
+
+  test("rejects empty, '=', whitespace, NUL and overlong keys", () => {
+    for (const key of ["", "   ", "A=B", "A B", "A\0B", "K".repeat(257)]) {
+      expect(envVarSchema.safeParse({ key, value: "" }).success).toBe(false);
+    }
   });
 });
