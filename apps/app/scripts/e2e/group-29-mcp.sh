@@ -35,6 +35,7 @@ AUTHORIZE_URL="$BASE_URL/api/oauth/authorize?response_type=code&client_id=$CLIEN
 
 REDIRECT_RESPONSE=$(curl -s -D - -o /dev/null -X POST \
   -b /tmp/frost-mcp-cookies.txt \
+  -H "Origin: $BASE_URL" \
   -d "action=approve" \
   "$AUTHORIZE_URL" 2>/dev/null)
 

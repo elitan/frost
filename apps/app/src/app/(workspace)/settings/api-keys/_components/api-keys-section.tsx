@@ -84,7 +84,7 @@ export function ApiKeysSection() {
     <SettingCard
       title="API Keys"
       description="Create API keys for programmatic access. Keys are shown only once."
-      learnMoreUrl="/api/docs"
+      learnMoreUrl="/docs"
       learnMoreText="API documentation"
     >
       {loading ? (

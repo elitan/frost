@@ -2,6 +2,7 @@ import { cleanupEnvironmentAttachments } from "./database-runtime";
 import { db } from "./db";
 import { removeNetwork, stopContainer, stopContainersByLabel } from "./docker";
 import { syncCaddyConfig } from "./domains";
+import { removeGarageRuntimeConfig } from "./garage-runtime";
 import { removeSSLCerts } from "./ssl";
 import { buildVolumeName, removeVolume } from "./volumes";
 
@@ -26,6 +27,13 @@ async function cleanupServiceResources(
 
   if (service.serviceType === "database") {
     await removeSSLCerts(service.id);
+  }
+
+  // Garage-based services keep secrets (admin token, rpc secret) on disk.
+  try {
+    removeGarageRuntimeConfig(service.id);
+  } catch (error) {
+    console.error(`Failed to remove Garage config for ${service.id}:`, error);
   }
 }
 

@@ -49,7 +49,7 @@ log "Testing PR opened creates preview environment..."
 PR_NUMBER=$((RANDOM + 1000))
 PR_TITLE="Add User Authentication"
 PR_SHA="def456$(date +%s)"
-PR_OPENED_PAYLOAD="{\"action\":\"opened\",\"number\":$PR_NUMBER,\"pull_request\":{\"title\":\"$PR_TITLE\",\"head\":{\"ref\":\"$PR_BRANCH\",\"sha\":\"$PR_SHA\"}},\"repository\":{\"clone_url\":\"https://github.com/elitan/frost.git\"},\"sender\":{\"login\":\"e2e-test\",\"avatar_url\":\"https://example.com/avatar.png\"}}"
+PR_OPENED_PAYLOAD="{\"action\":\"opened\",\"number\":$PR_NUMBER,\"pull_request\":{\"title\":\"$PR_TITLE\",\"head\":{\"ref\":\"$PR_BRANCH\",\"sha\":\"$PR_SHA\",\"repo\":{\"full_name\":\"elitan/frost\"}}},\"repository\":{\"full_name\":\"elitan/frost\",\"clone_url\":\"https://github.com/elitan/frost.git\"},\"sender\":{\"login\":\"e2e-test\",\"avatar_url\":\"https://example.com/avatar.png\"}}"
 PR_OPENED_RESULT=$(send_webhook "pull_request" "$PR_OPENED_PAYLOAD")
 echo "$PR_OPENED_RESULT" | grep -q "Created preview environment" || fail "PR opened should create preview. Got: $PR_OPENED_RESULT"
 PREVIEW_ENV_ID=$(echo "$PR_OPENED_RESULT" | jq -r '.environmentId')
@@ -59,7 +59,7 @@ log "Created preview environment: $PREVIEW_ENV_ID"
 log "Verifying environment name is slugified PR title..."
 ENV_DATA=$(api "$BASE_URL/api/environments/$PREVIEW_ENV_ID")
 ENV_NAME=$(json_get "$ENV_DATA" '.name')
-[ "$ENV_NAME" = "add-user-authentication" ] || fail "Expected env name 'add-user-authentication', got: $ENV_NAME"
+[ "$ENV_NAME" = "pr-$PR_NUMBER-add-user-authentication" ] || fail "Expected env name 'pr-$PR_NUMBER-add-user-authentication', got: $ENV_NAME"
 log "Environment name correct: $ENV_NAME"
 
 log "Waiting for preview deployment..."
@@ -71,17 +71,17 @@ log "Preview deployment running"
 log "Testing PR synchronize updates environment name..."
 NEW_PR_TITLE="Add OAuth Authentication"
 NEW_PR_SHA="ghi789$(date +%s)"
-PR_SYNC_PAYLOAD="{\"action\":\"synchronize\",\"number\":$PR_NUMBER,\"pull_request\":{\"title\":\"$NEW_PR_TITLE\",\"head\":{\"ref\":\"$PR_BRANCH\",\"sha\":\"$NEW_PR_SHA\"}},\"repository\":{\"clone_url\":\"https://github.com/elitan/frost.git\"},\"sender\":{\"login\":\"e2e-test\",\"avatar_url\":\"https://example.com/avatar.png\"}}"
+PR_SYNC_PAYLOAD="{\"action\":\"synchronize\",\"number\":$PR_NUMBER,\"pull_request\":{\"title\":\"$NEW_PR_TITLE\",\"head\":{\"ref\":\"$PR_BRANCH\",\"sha\":\"$NEW_PR_SHA\",\"repo\":{\"full_name\":\"elitan/frost\"}}},\"repository\":{\"full_name\":\"elitan/frost\",\"clone_url\":\"https://github.com/elitan/frost.git\"},\"sender\":{\"login\":\"e2e-test\",\"avatar_url\":\"https://example.com/avatar.png\"}}"
 PR_SYNC_RESULT=$(send_webhook "pull_request" "$PR_SYNC_PAYLOAD")
 echo "$PR_SYNC_RESULT" | grep -q "Updated preview environment" || fail "PR sync should update preview. Got: $PR_SYNC_RESULT"
 
 ENV_DATA_UPDATED=$(api "$BASE_URL/api/environments/$PREVIEW_ENV_ID")
 ENV_NAME_UPDATED=$(json_get "$ENV_DATA_UPDATED" '.name')
-[ "$ENV_NAME_UPDATED" = "add-oauth-authentication" ] || fail "Expected updated env name 'add-oauth-authentication', got: $ENV_NAME_UPDATED"
+[ "$ENV_NAME_UPDATED" = "pr-$PR_NUMBER-add-oauth-authentication" ] || fail "Expected updated env name 'pr-$PR_NUMBER-add-oauth-authentication', got: $ENV_NAME_UPDATED"
 log "Environment name updated: $ENV_NAME_UPDATED"
 
 log "Testing PR closed deletes environment..."
-PR_CLOSED_PAYLOAD="{\"action\":\"closed\",\"number\":$PR_NUMBER,\"pull_request\":{\"title\":\"$NEW_PR_TITLE\",\"head\":{\"ref\":\"$PR_BRANCH\",\"sha\":\"$NEW_PR_SHA\"}},\"repository\":{\"clone_url\":\"https://github.com/elitan/frost.git\"},\"sender\":{\"login\":\"e2e-test\",\"avatar_url\":\"https://example.com/avatar.png\"}}"
+PR_CLOSED_PAYLOAD="{\"action\":\"closed\",\"number\":$PR_NUMBER,\"pull_request\":{\"title\":\"$NEW_PR_TITLE\",\"head\":{\"ref\":\"$PR_BRANCH\",\"sha\":\"$NEW_PR_SHA\",\"repo\":{\"full_name\":\"elitan/frost\"}}},\"repository\":{\"full_name\":\"elitan/frost\",\"clone_url\":\"https://github.com/elitan/frost.git\"},\"sender\":{\"login\":\"e2e-test\",\"avatar_url\":\"https://example.com/avatar.png\"}}"
 PR_CLOSED_RESULT=$(send_webhook "pull_request" "$PR_CLOSED_PAYLOAD")
 echo "$PR_CLOSED_RESULT" | grep -q "Deleted preview environment" || fail "PR closed should delete preview. Got: $PR_CLOSED_RESULT"
 log "Preview environment deleted"

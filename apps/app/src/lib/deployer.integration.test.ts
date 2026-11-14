@@ -6,7 +6,12 @@ import {
   resetSyncCaddyConfigForTests,
   setSyncCaddyConfigForTests,
 } from "./deployer";
-import { getContainerStatus, removeNetwork, stopContainer } from "./docker";
+import {
+  getContainerStatus,
+  removeNetwork,
+  stopContainer,
+  stopContainersByLabel,
+} from "./docker";
 
 const TEST_PROJECT_ID = `test-${nanoid(8)}`;
 const TEST_ENV_ID = `test-${nanoid(8)}`;
@@ -208,6 +213,10 @@ describe("zero-downtime deploy", () => {
   }, 60000);
 
   afterAll(async () => {
+    await stopContainersByLabel("frost.service.id", ZD_SERVICE_ID).catch(
+      () => {},
+    );
+
     const deployments = await db
       .selectFrom("deployments")
       .select("id")
@@ -450,6 +459,10 @@ describe("drain and replica cleanup", () => {
   }, 60000);
 
   afterAll(async () => {
+    await stopContainersByLabel("frost.service.id", DRAIN_SERVICE_ID).catch(
+      () => {},
+    );
+
     const deployments = await db
       .selectFrom("deployments")
       .select("id")

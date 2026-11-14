@@ -35,8 +35,8 @@ export function PasswordSection() {
       return;
     }
 
-    if (newPassword.length < 4) {
-      toast.error("New password must be at least 4 characters");
+    if (newPassword.length < 12) {
+      toast.error("New password must be at least 12 characters");
       return;
     }
     mutation.mutate({ currentPassword, newPassword });

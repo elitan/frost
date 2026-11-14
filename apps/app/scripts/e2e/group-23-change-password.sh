@@ -26,14 +26,14 @@ fi
 # wrong current password → error
 log "Attempting change with wrong password..."
 RESULT=$(api -X PUT "$BASE_URL/api/settings/password" \
-  -d '{"currentPassword":"wrong-password-here","newPassword":"something"}')
+  -d '{"currentPassword":"wrong-password-here","newPassword":"something-long-enough"}')
 ERROR=$(json_get "$RESULT" '.message // .error // empty')
 if ! echo "$ERROR" | grep -qi "current password is incorrect"; then
   fail "Expected 'Current password is incorrect', got: $RESULT"
 fi
 log "Wrong password correctly rejected"
 
-# too-short new password → error (zod validation, min 4)
+# too-short new password → error (zod validation, min 12)
 log "Attempting change with too-short new password..."
 RESULT=$(api -X PUT "$BASE_URL/api/settings/password" \
   -d "{\"currentPassword\":\"$ADMIN_PASSWORD\",\"newPassword\":\"ab\"}")

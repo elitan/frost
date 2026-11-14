@@ -9,7 +9,7 @@ import { removeGarageRuntimeConfig } from "../garage-runtime";
 import { newRuntimeServiceId } from "../id";
 import { cleanupService } from "../lifecycle";
 import { createService } from "../services";
-import { slugify } from "../slugify";
+import { slugifyWithFallback } from "../slugify";
 import {
   GARAGE_IMAGE,
   GARAGE_PROVISION_TIMEOUT_MS,
@@ -241,11 +241,12 @@ export async function createObjectStorageRuntimeService(
     `object-storage-${input.slug}`,
   );
   const internalEndpoint = `http://${serviceHostname}:${GARAGE_S3_PORT}`;
-  const projectHostname = input.projectHostname ?? slugify(input.projectName);
+  const projectHostname =
+    input.projectHostname ?? slugifyWithFallback(input.projectName, "project");
   const environmentName =
     input.environmentType === "production"
       ? undefined
-      : slugify(input.environmentName);
+      : slugifyWithFallback(input.environmentName, "env");
 
   const service = await createService({
     id: newRuntimeServiceId(),

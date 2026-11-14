@@ -17,6 +17,7 @@ timer() {
 }
 
 FROST_DIR="/opt/frost"
+FROST_BIND_HOST="${FROST_BIND_HOST:-127.0.0.1}"
 FROST_REPO="https://github.com/elitan/frost"
 FROST_VERSION=""
 FROST_BRANCH=""
@@ -352,7 +353,7 @@ FROST_POSTGRES_ZFS_DATASET_BASE=$ZFS_DATASET_BASE
 FROST_POSTGRES_ZFS_MOUNT_BASE=$ZFS_MOUNT_BASE
 NODE_ENV=production
 # Bind loopback only; Caddy proxies public traffic to localhost:3000
-HOSTNAME=127.0.0.1
+HOSTNAME=$FROST_BIND_HOST
 EOF
 
 # For branch mode, symlink .env to apps/app so it's accessible when running from there
@@ -374,7 +375,7 @@ timer "Creating systemd service..."
 if [ "$USE_TARBALL" = true ]; then
   EXEC_START="/usr/local/bin/bun $FROST_DIR/server.js"
 else
-  EXEC_START="/usr/local/bin/bun run start --hostname 127.0.0.1"
+  EXEC_START="/usr/local/bin/bun run start --hostname $FROST_BIND_HOST"
 fi
 
 cat > /etc/systemd/system/frost.service << EOF

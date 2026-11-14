@@ -412,10 +412,14 @@ if [ -f "$FROST_DIR/.env" ]; then
   grep -q '^HOSTNAME=' "$FROST_DIR/.env" || echo "HOSTNAME=127.0.0.1" >> "$FROST_DIR/.env"
 fi
 
+# Bind host comes from .env (HOSTNAME); defaults to loopback
+FROST_BIND_HOST=$(grep '^HOSTNAME=' "$FROST_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2-)
+FROST_BIND_HOST=${FROST_BIND_HOST:-127.0.0.1}
+
 # git mode runs `next start`, which ignores HOSTNAME; pass --hostname instead
 FROST_UNIT=/etc/systemd/system/frost.service
 if [ -f "$FROST_UNIT" ] && grep -q '^ExecStart=/usr/local/bin/bun run start$' "$FROST_UNIT"; then
-  sed -i 's|^ExecStart=/usr/local/bin/bun run start$|ExecStart=/usr/local/bin/bun run start --hostname 127.0.0.1|' "$FROST_UNIT"
+  sed -i "s|^ExecStart=/usr/local/bin/bun run start\$|ExecStart=/usr/local/bin/bun run start --hostname $FROST_BIND_HOST|" "$FROST_UNIT"
   systemctl daemon-reload 2>/dev/null || true
 fi
 
@@ -559,7 +563,7 @@ if [ "$GIT_MODE" = true ]; then
     log "Creating .env symlink for monorepo..."
     ln -sf "$FROST_DIR/.env" "$FROST_DIR/apps/app/.env"
     log "Updating systemd service for git mode..."
-    sed -i 's|ExecStart=.*|ExecStart=/usr/local/bin/bun run start --hostname 127.0.0.1|' /etc/systemd/system/frost.service
+    sed -i "s|ExecStart=.*|ExecStart=/usr/local/bin/bun run start --hostname ${FROST_BIND_HOST:-127.0.0.1}|" /etc/systemd/system/frost.service
     if grep -q '^TimeoutStartSec=' /etc/systemd/system/frost.service; then
       sed -i 's|^TimeoutStartSec=.*|TimeoutStartSec=900|' /etc/systemd/system/frost.service
     else
