@@ -3,8 +3,19 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "apps/marketing/**"
+      - ".codex/**"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "apps/marketing/**"
+      - ".codex/**"
+  schedule:
+    # Nightly full run, including the upgrade e2e
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -114,6 +125,133 @@ jobs:
           done
           echo "Build failed after 3 attempts"
           exit 1
+
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      upgrade: ${{ steps.filter.outputs.upgrade }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Detect upgrade-relevant changes
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = "schedule" ] || [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "upgrade=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$EVENT" = "pull_request" ]; then BASE="$BASE_SHA"; else BASE="$BEFORE"; fi
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "upgrade=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          CHANGED=$(git diff --name-only "$BASE" "$GITHUB_SHA")
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -Eq '^(install\.sh|update\.sh|apps/app/schema/|apps/app/src/lib/(migrate|updater|update-|frost-db-)|apps/app/src/server/updates\.ts|apps/app/src/instrumentation\.ts|apps/app/scripts/(e2e-upgrade|e2e-update)|\.github/workflows/(ci|release)\.yml)'; then
+            echo "upgrade=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "upgrade=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Full e2e on GitHub-hosted runners (free for public repos). The harness
+  # treats the runner as the "server" and reaches it over SSH on 127.0.0.1.
+  e2e-runner:
+    needs: [build]
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            os: ubuntu-24.04
+          - arch: arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    name: e2e-runner (${{ matrix.arch }})
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare runner as a fresh server
+        run: |
+          sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades.service >/dev/null 2>&1 || true
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y -qq openssh-server >/dev/null
+          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+          sudo mkdir -p /root/.ssh
+          sudo cp ~/.ssh/id_ed25519.pub /root/.ssh/authorized_keys
+          sudo chmod 700 /root/.ssh && sudo chmod 600 /root/.ssh/authorized_keys
+          sudo systemctl restart ssh || sudo systemctl restart sshd
+          ssh -o StrictHostKeyChecking=no root@127.0.0.1 "echo SSH ready"
+          echo "E2E_PUBLIC_IP=$(curl -fsS https://api.ipify.org)" >> "$GITHUB_ENV"
+
+      - name: Install Frost
+        id: install
+        run: |
+          BRANCH="${{ github.head_ref || github.ref_name }}"
+          sudo FROST_BIND_HOST=0.0.0.0 bash ./install.sh -b "$BRANCH" --create-api-key 2>&1 | tee /tmp/install-output.txt
+          API_KEY=$(sed 's/\x1b\[[0-9;]*m//g' /tmp/install-output.txt | grep "API Key:" | awk '{print $3}')
+          if [ -z "$API_KEY" ]; then
+            echo "Failed to extract API key"; exit 1
+          fi
+          echo "::add-mask::$API_KEY"
+          echo "api_key=$API_KEY" >> "$GITHUB_OUTPUT"
+          sudo bash -c 'git config --global user.email "ci@frost.dev" && git config --global user.name "Frost CI" && git config --global --add safe.directory "*"
+            for dir in /opt/frost/apps/app/test/fixtures/*/; do
+              if [ ! -d "$dir/.git" ]; then
+                cd "$dir" && git init -q -b main && git add -A && git commit -q -m "init"
+              fi
+            done'
+
+      - name: Setup ZFS branching backend
+        run: |
+          sudo bash -c '
+            set -euo pipefail
+            apt-get -o DPkg::Lock::Timeout=600 install -y -qq zfsutils-linux >/dev/null
+            modprobe zfs
+            POOL_NAME=frostpool
+            DATASET_BASE=frost/databases
+            MOUNT_BASE=/opt/frost/data/postgres/zfs
+            mkdir -p "$MOUNT_BASE"
+            truncate -s 8G /opt/frost/data/zfs-loopback.img
+            zpool create -f "$POOL_NAME" /opt/frost/data/zfs-loopback.img
+            zfs create -p "$POOL_NAME/$DATASET_BASE"
+            sed -i "/^FROST_POSTGRES_ZFS_/d" /opt/frost/.env
+            {
+              echo "FROST_POSTGRES_ZFS_POOL=$POOL_NAME"
+              echo "FROST_POSTGRES_ZFS_DATASET_BASE=$DATASET_BASE"
+              echo "FROST_POSTGRES_ZFS_MOUNT_BASE=$MOUNT_BASE"
+            } >> /opt/frost/.env
+            systemctl restart frost
+          '
+
+      - name: Wait for Frost
+        run: |
+          for i in {1..36}; do
+            if curl -fsS -o /dev/null http://127.0.0.1:3000/api/health; then
+              echo "Frost is ready"; exit 0
+            fi
+            sleep 5
+          done
+          sudo journalctl -u frost --no-pager -n 80
+          exit 1
+
+      - name: Run E2E tests
+        env:
+          E2E_BRANCH: ${{ github.head_ref || github.ref_name }}
+          E2E_BATCH_SIZE: 4
+        run: |
+          set -o pipefail
+          ./apps/app/scripts/e2e-test.sh 127.0.0.1 "${{ steps.install.outputs.api_key }}" 2>&1 | tee /tmp/e2e-tests.log
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          sudo journalctl -u frost --no-pager -n 500 || true
+          sudo journalctl -u caddy --no-pager -n 50 || true
+          sudo docker ps -a || true
+          free -h; df -h /; uname -a
 
   e2e-vps:
     needs: [build]
@@ -447,7 +585,8 @@ jobs:
           echo "Server deleted"
 
   e2e-upgrade:
-    needs: [build]
+    needs: [build, changes]
+    if: needs.changes.outputs.upgrade == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:

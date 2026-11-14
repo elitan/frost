@@ -10,7 +10,10 @@ trap 'release_e2e_lock "$SETTINGS_LOCK"' EXIT
 log "=== Domain & SSL ==="
 
 log "Enabling SSL with staging certs..."
-FROST_DOMAIN="frost.$SERVER_IP.sslip.io"
+# DNS must resolve to the server's public IP (SERVER_IP may be 127.0.0.1
+# when e2e runs on the same machine, e.g. a GitHub-hosted runner).
+PUBLIC_IP="${E2E_PUBLIC_IP:-$SERVER_IP}"
+FROST_DOMAIN="frost.$PUBLIC_IP.sslip.io"
 SSL_RESULT=$(api -X POST "$BASE_URL/api/settings/enable-ssl" \
   -d "{\"domain\":\"$FROST_DOMAIN\",\"email\":\"frost-e2e@j4labs.se\",\"staging\":true}" || true)
 SSL_SUCCESS=$(json_get "$SSL_RESULT" '.success // empty')
@@ -57,7 +60,7 @@ if [ "$DOMAIN_COUNT" -eq 0 ]; then
 fi
 
 log "Testing custom domain addition..."
-CUSTOM_DOMAIN="test-custom.$SERVER_IP.sslip.io"
+CUSTOM_DOMAIN="test-custom.$PUBLIC_IP.sslip.io"
 ADD_RESULT=$(api -X POST "$BASE_URL/api/services/$SERVICE_ID/domains" \
   -d "{\"domain\":\"$CUSTOM_DOMAIN\",\"type\":\"proxy\"}")
 ADD_DOMAIN_ID=$(json_get "$ADD_RESULT" '.id')
