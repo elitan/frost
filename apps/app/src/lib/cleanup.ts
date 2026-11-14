@@ -4,6 +4,7 @@ import { db } from "./db";
 import type { DB } from "./db-types";
 import {
   getImageCreatedAt,
+  getImageServiceId,
   getImageSize,
   getRunningImageNames,
   isNetworkInUse,
@@ -27,6 +28,22 @@ async function isImageRollbackEligible(imageName: string): Promise<boolean> {
     .where("rollbackEligible", "=", true)
     .executeTakeFirst();
   return deployment !== undefined;
+}
+
+/**
+ * Groups Frost-built images per service. Images carry a `frost.service.id`
+ * label, which groups both the current `frost-<serviceId>:<sha>` names and
+ * the legacy `frost-<projectId>-<serviceName>:<sha>` names under one service.
+ * Falls back to the repository name when the label is missing.
+ */
+export function getImageGroupKey(
+  image: string,
+  serviceIdLabel: string | null,
+): string | null {
+  const match = image.match(/^(frost-[^:]+):/);
+  if (!match) return null;
+  if (serviceIdLabel) return `service:${serviceIdLabel}`;
+  return `repo:${match[1]}`;
 }
 
 export interface CleanupOptions {
@@ -247,10 +264,10 @@ export async function runCleanup(
       { name: string; created: Date; size: number }[]
     >();
     for (const image of allImages) {
-      const match = image.match(/^(frost-[^:]+):/);
-      if (!match) continue;
+      const serviceIdLabel = await getImageServiceId(image);
+      const servicePrefix = getImageGroupKey(image, serviceIdLabel);
+      if (!servicePrefix) continue;
 
-      const servicePrefix = match[1];
       const created = await getImageCreatedAt(image).catch(() => new Date(0));
       const size = await getImageSize(image);
 

@@ -1,6 +1,7 @@
 import { exec, spawn } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
 import { createConnection } from "node:net";
-import { join, relative } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { db } from "./db";
@@ -62,14 +63,23 @@ export async function buildImage(
     timeoutMs,
   } = options;
 
+  let contextPath: string;
+  let resolvedDockerfile: string;
+  try {
+    ({ contextPath, dockerfile: resolvedDockerfile } = resolveBuildPaths(
+      repoPath,
+      dockerfilePath,
+      buildContext,
+    ));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { success: false, imageName, log: "", error: message };
+  }
+
   if (await imageExists(imageName)) {
     await removeImage(imageName);
   }
 
-  const contextPath = buildContext ? join(repoPath, buildContext) : repoPath;
-  const resolvedDockerfile = buildContext
-    ? relative(contextPath, join(repoPath, dockerfilePath))
-    : dockerfilePath;
   const args = ["build", "-t", imageName, "-f", resolvedDockerfile];
   if (envVars) {
     for (const [key, value] of Object.entries(envVars)) {
@@ -100,6 +110,54 @@ export async function buildImage(
     imageName,
     log: result.output,
     error: result.error || `Build exited with code ${result.code}`,
+  };
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return (
+    rel === "" ||
+    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  );
+}
+
+function assertInsideRepo(
+  repoPath: string,
+  target: string,
+  label: string,
+  rawValue: string,
+): void {
+  if (!isPathInside(repoPath, target)) {
+    throw new Error(
+      `${label} "${rawValue}" resolves outside the repository; it must be a path inside the repo`,
+    );
+  }
+  if (existsSync(target)) {
+    const realRepo = realpathSync(repoPath);
+    const realTarget = realpathSync(target);
+    if (!isPathInside(realRepo, realTarget)) {
+      throw new Error(
+        `${label} "${rawValue}" resolves outside the repository (via symlink)`,
+      );
+    }
+  }
+}
+
+export function resolveBuildPaths(
+  repoPath: string,
+  dockerfilePath: string,
+  buildContext?: string,
+): { contextPath: string; dockerfile: string } {
+  const root = resolve(repoPath);
+  const contextPath = buildContext ? resolve(root, buildContext) : root;
+  if (buildContext) {
+    assertInsideRepo(root, contextPath, "Build context", buildContext);
+  }
+  const dockerfileAbs = resolve(root, dockerfilePath);
+  assertInsideRepo(root, dockerfileAbs, "Dockerfile path", dockerfilePath);
+  return {
+    contextPath,
+    dockerfile: relative(contextPath, dockerfileAbs),
   };
 }
 
@@ -642,11 +700,11 @@ export async function waitForHealthy(
 ): Promise<boolean> {
   const { containerId, port, path, timeoutSeconds = 60 } = options;
   const intervalMs = 1000;
-  const maxAttempts = timeoutSeconds;
+  const deadline = Date.now() + timeoutSeconds * 1000;
   let consecutiveExited = 0;
   const maxConsecutiveExited = 10;
 
-  for (let i = 0; i < maxAttempts; i++) {
+  while (Date.now() < deadline) {
     const status = await getContainerStatus(containerId);
 
     if (status === "exited" || status === "dead") {
@@ -667,7 +725,9 @@ export async function waitForHealthy(
       }
     }
 
-    await new Promise((r) => setTimeout(r, intervalMs));
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await new Promise((r) => setTimeout(r, Math.min(intervalMs, remainingMs)));
   }
   return false;
 }
@@ -969,6 +1029,18 @@ export async function getImageCreatedAt(image: string): Promise<Date> {
     `docker inspect --format '{{.Created}}' ${shellEscape(image)}`,
   );
   return new Date(stdout.trim());
+}
+
+export async function getImageServiceId(image: string): Promise<string | null> {
+  try {
+    const { stdout } = await execAsync(
+      `docker inspect --format '{{index .Config.Labels "frost.service.id"}}' ${shellEscape(image)}`,
+    );
+    const value = stdout.trim();
+    return value && value !== "<no value>" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function getImageSize(image: string): Promise<number> {

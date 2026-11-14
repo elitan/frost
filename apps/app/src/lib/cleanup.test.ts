@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { getImageGroupKey } from "./cleanup";
 
 describe("cleanup utilities", () => {
   test("groups images by service prefix", () => {
@@ -81,5 +82,24 @@ describe("cleanup utilities", () => {
     expect(formatBytes(1536)).toBe("1.5 KB");
     expect(formatBytes(1048576)).toBe("1.0 MB");
     expect(formatBytes(1073741824)).toBe("1.0 GB");
+  });
+});
+
+describe("getImageGroupKey", () => {
+  test("groups legacy and new names by service label", () => {
+    expect(getImageGroupKey("frost-proj1-api:abc", "svc_1")).toBe(
+      "service:svc_1",
+    );
+    expect(getImageGroupKey("frost-svc-1:def", "svc_1")).toBe("service:svc_1");
+  });
+
+  test("falls back to repository name without label", () => {
+    expect(getImageGroupKey("frost-proj1-api:abc", null)).toBe(
+      "repo:frost-proj1-api",
+    );
+  });
+
+  test("ignores non-frost images", () => {
+    expect(getImageGroupKey("nginx:alpine", "svc_1")).toBeNull();
   });
 });

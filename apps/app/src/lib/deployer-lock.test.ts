@@ -1,5 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { formatEnvFileContent, withServiceDeploymentLock } from "./deployer";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  buildServiceImageName,
+  formatEnvFileContent,
+  withServiceDeploymentLock,
+  writeEnvFileSafely,
+} from "./deployer";
 
 function sleep(ms: number): Promise<void> {
   return new Promise(function onCreate(resolve) {
@@ -92,5 +107,36 @@ describe("formatEnvFileContent", function describeEnvFileFormatting() {
     expect(() =>
       formatEnvFileContent([{ key: "BAD\nKEY", value: "value" }]),
     ).toThrow("Invalid environment variable key");
+  });
+});
+
+describe("buildServiceImageName", function describeImageName() {
+  test("names images per service id", function testPerService() {
+    expect(buildServiceImageName("svc_abc123", "1234567")).toBe(
+      "frost-svc-abc123:1234567",
+    );
+    expect(buildServiceImageName("svc_one", "abc")).not.toBe(
+      buildServiceImageName("svc_two", "abc"),
+    );
+  });
+});
+
+describe("writeEnvFileSafely", function describeWriteEnv() {
+  test("does not follow a .env symlink out of the repo", function testSymlink() {
+    const root = mkdtempSync(join(tmpdir(), "frost-env-"));
+    try {
+      const repo = join(root, "repo");
+      const outside = join(root, "outside.txt");
+      writeFileSync(outside, "original");
+      mkdirSync(repo);
+      symlinkSync(outside, join(repo, ".env"));
+
+      writeEnvFileSafely(repo, "A=1");
+
+      expect(readFileSync(outside, "utf-8")).toBe("original");
+      expect(readFileSync(join(repo, ".env"), "utf-8")).toBe("A=1");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -122,11 +122,20 @@ type EffectiveService = Pick<
   | "replicaCount"
 >;
 
-export function mergeConfigWithService<T extends EffectiveService>(
-  service: T,
-  config: FrostConfig,
-): T {
-  return {
+function hasVolumes(volumes: string | null | undefined): boolean {
+  if (!volumes) return false;
+  try {
+    const parsed = JSON.parse(volumes);
+    return Array.isArray(parsed) ? parsed.length > 0 : true;
+  } catch {
+    return volumes !== "[]";
+  }
+}
+
+export function mergeConfigWithService<
+  T extends EffectiveService & { volumes?: string | null },
+>(service: T, config: FrostConfig): T {
+  const merged: T = {
     ...service,
     dockerfilePath: config.dockerfile ?? service.dockerfilePath,
     containerPort: config.port ?? service.containerPort,
@@ -139,4 +148,12 @@ export function mergeConfigWithService<T extends EffectiveService>(
     shutdownTimeout: config.deploy?.shutdown_timeout ?? service.shutdownTimeout,
     replicaCount: config.deploy?.replicas ?? service.replicaCount,
   };
+
+  if ((merged.replicaCount ?? 1) > 1 && hasVolumes(service.volumes)) {
+    throw new Error(
+      `frost.yaml: deploy.replicas=${merged.replicaCount} is not allowed for services with volumes (volumes cannot be shared between replicas)`,
+    );
+  }
+
+  return merged;
 }

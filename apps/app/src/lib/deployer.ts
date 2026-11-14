@@ -2,7 +2,7 @@ import { exec } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { Selectable } from "kysely";
+import { type Selectable, sql } from "kysely";
 import { getSetting } from "./auth";
 import { emitBuildLogChunk } from "./build-log-stream";
 import { buildContainerCommandOptions } from "./container-command";
@@ -210,10 +210,11 @@ async function markDeploymentRunningAndSetCurrentServiceDeployment(
   serviceId: string,
   containerId: string,
   hostPort: number,
-): Promise<void> {
+  claim: DeploymentClaim,
+): Promise<boolean> {
   const finishedAt = Date.now();
-  await db.transaction().execute(async (trx) => {
-    await trx
+  return db.transaction().execute(async (trx) => {
+    const result = await trx
       .updateTable("deployments")
       .set({
         status: "running",
@@ -222,13 +223,29 @@ async function markDeploymentRunningAndSetCurrentServiceDeployment(
         finishedAt,
       })
       .where("id", "=", deploymentId)
-      .execute();
+      .where("status", "in", IN_PROGRESS_DEPLOYMENT_STATUSES)
+      .where((eb) =>
+        eb.exists(
+          eb
+            .selectFrom("deploymentLocks")
+            .select("deploymentLocks.serviceId")
+            .where("deploymentLocks.serviceId", "=", claim.serviceId)
+            .where("deploymentLocks.deploymentId", "=", claim.deploymentId)
+            .where("deploymentLocks.claimToken", "=", claim.claimToken),
+        ),
+      )
+      .executeTakeFirst();
+
+    if (getUpdatedRowCount(result) !== 1) {
+      return false;
+    }
 
     await trx
       .updateTable("services")
       .set({ currentDeploymentId: deploymentId })
       .where("id", "=", serviceId)
       .execute();
+    return true;
   });
 }
 
@@ -272,14 +289,11 @@ async function appendLog(
   options?: { emit?: boolean },
 ) {
   if (!log) return;
-  const deployment = await db
-    .selectFrom("deployments")
-    .select("buildLog")
+  await db
+    .updateTable("deployments")
+    .set({ buildLog: sql<string>`coalesce(build_log, '') || ${log}` })
     .where("id", "=", id)
-    .executeTakeFirst();
-
-  const existingLog = deployment?.buildLog || "";
-  await updateDeployment(id, { buildLog: existingLog + log });
+    .execute();
   if (options?.emit !== false) {
     emitBuildLogChunk(id, log);
   }
@@ -343,6 +357,7 @@ async function getEffectiveServiceForRollback(
   deploymentId: string,
   service: Selectable<Services>,
   branch: string | null | undefined,
+  timeoutMs: number,
 ): Promise<Selectable<Services>> {
   if (service.deployType !== "repo" || !service.repoUrl || !branch) {
     return service;
@@ -367,9 +382,32 @@ async function getEffectiveServiceForRollback(
   }
 
   try {
-    await execAsync(
-      `git clone --depth 1 --branch ${shellEscape(branch)} ${shellEscape(cloneUrl)} ${shellEscape(repoPath)}`,
-    );
+    const cloneResult = await runCommand({
+      command: "git",
+      args: [
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        branch,
+        "--",
+        cloneUrl,
+        repoPath,
+      ],
+      env: GIT_ENV,
+      timeoutMs: Math.max(1, Math.min(ROLLBACK_CLONE_TIMEOUT_MS, timeoutMs)),
+    });
+    if (cloneResult.code !== 0 || cloneResult.timedOut) {
+      throw new Error(
+        cloneResult.timedOut
+          ? "git clone timed out"
+          : cloneResult.error ||
+              `git clone exited with code ${cloneResult.code}`,
+      );
+    }
+    if (cloneUrl !== service.repoUrl) {
+      await stripCloneCredentials(repoPath, service.repoUrl);
+    }
     return await getEffectiveServiceFromRepoConfig(
       deploymentId,
       service,
@@ -396,7 +434,11 @@ async function isDeploymentCancelled(
     return true;
   }
 
-  if (deployment.status === "cancelled") {
+  if (
+    deployment.status === "cancelled" ||
+    deployment.status === "failed" ||
+    deployment.status === "stopped"
+  ) {
     return true;
   }
 
@@ -413,6 +455,51 @@ function sanitizeDockerName(name: string): string {
     .replace(/[^a-z0-9.-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+export function buildServiceImageName(
+  serviceId: string,
+  commitSha: string,
+): string {
+  return `${sanitizeDockerName(`frost-${serviceId}`)}:${commitSha}`;
+}
+
+const GIT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_TERMINAL_PROMPT: "0",
+};
+
+const ROLLBACK_CLONE_TIMEOUT_MS = 2 * 60 * 1000;
+
+function removeClonedRepo(repoPath: string): void {
+  try {
+    rmSync(repoPath, { recursive: true, force: true });
+  } catch (err) {
+    console.warn(`Failed to remove cloned repo ${repoPath}:`, err);
+  }
+}
+
+export function writeEnvFileSafely(repoPath: string, content: string): void {
+  const envPath = join(repoPath, ".env");
+  rmSync(envPath, { recursive: true, force: true });
+  writeFileSync(envPath, content, { flag: "wx" });
+}
+
+async function stripCloneCredentials(
+  repoPath: string,
+  repoUrl: string,
+): Promise<void> {
+  const result = await runCommand({
+    command: "git",
+    args: ["-C", repoPath, "remote", "set-url", "origin", repoUrl],
+    env: GIT_ENV,
+    timeoutMs: 30_000,
+  });
+  if (result.code !== 0) {
+    throw new Error(
+      `Failed to remove credentials from cloned repo: ${result.error || result.output}`,
+    );
+  }
 }
 
 function parseEnvVars(envVarsJson: string): Record<string, string> {
@@ -895,9 +982,15 @@ async function healthCheckReplicas(
         `Replica ${failed.index} status: ${containerStatus}\n`,
       );
       try {
-        const { stdout: logs } = await execAsync(
-          `docker logs ${shellEscape(failed.containerId)} 2>&1 | tail -50`,
-        );
+        const logsResult = await runCommand({
+          command: "docker",
+          args: ["logs", "--tail", "50", failed.containerId],
+          timeoutMs: 15_000,
+        });
+        if (logsResult.code !== 0) {
+          throw new Error(logsResult.error || "docker logs failed");
+        }
+        const logs = logsResult.output;
         await appendLog(
           deploymentId,
           `Replica ${failed.index} logs:\n${logs}\n`,
@@ -1215,6 +1308,8 @@ async function runServiceDeployment(
     value,
   }));
 
+  let clonedRepoPath: string | null = null;
+
   try {
     let imageName: string;
     let effectiveService = service;
@@ -1298,6 +1393,7 @@ async function runServiceDeployment(
 
       const branch = service.branch;
       const repoPath = join(REPOS_PATH, deploymentId);
+      clonedRepoPath = repoPath;
 
       await updateDeployment(deploymentId, { status: "cloning" });
       await appendLog(deploymentId, `Cloning ${service.repoUrl}...\n`);
@@ -1345,9 +1441,11 @@ async function runServiceDeployment(
             "1",
             "--branch",
             branch,
+            "--",
             cloneUrl,
             repoPath,
           ],
+          env: GIT_ENV,
           timeoutMs: getRemainingTimeoutMs(),
           onData(chunk) {
             cloneLogAppender.append(chunk);
@@ -1375,6 +1473,10 @@ async function runServiceDeployment(
             cloneResult.output ||
             `git clone exited with code ${cloneResult.code}`,
         );
+      }
+
+      if (cloneUrl !== service.repoUrl) {
+        await stripCloneCredentials(repoPath, service.repoUrl);
       }
 
       effectiveService = await getEffectiveServiceFromRepoConfig(
@@ -1414,7 +1516,7 @@ async function runServiceDeployment(
 
       if (envVarsList.length > 0) {
         const envFileContent = formatEnvFileContent(envVarsList);
-        writeFileSync(join(repoPath, ".env"), envFileContent);
+        writeEnvFileSafely(repoPath, envFileContent);
         await appendLog(
           deploymentId,
           `Written ${envVarsList.length} env vars to .env\n`,
@@ -1431,7 +1533,7 @@ async function runServiceDeployment(
         deploymentId,
       );
 
-      imageName = `${sanitizeDockerName(`frost-${project.id}-${service.name}`)}:${commitSha}`;
+      imageName = buildServiceImageName(service.id, commitSha);
       const buildLogAppender = createLogChunkAppender(deploymentId);
       let buildResult: BuildResult | null = null;
       try {
@@ -1449,6 +1551,8 @@ async function runServiceDeployment(
         });
       } finally {
         await buildLogAppender.flush();
+        removeClonedRepo(repoPath);
+        clonedRepoPath = null;
       }
 
       if (!buildResult || !buildResult.success) {
@@ -1604,12 +1708,18 @@ async function runServiceDeployment(
     }
 
     const firstReplica = startedReplicas[0];
-    await markDeploymentRunningAndSetCurrentServiceDeployment(
-      deploymentId,
-      service.id,
-      firstReplica.containerId,
-      firstReplica.hostPort,
-    );
+    const markedRunning =
+      await markDeploymentRunningAndSetCurrentServiceDeployment(
+        deploymentId,
+        service.id,
+        firstReplica.containerId,
+        firstReplica.hostPort,
+        claim,
+      );
+    if (!markedRunning) {
+      await cleanupCancelledDeployment(deploymentId);
+      return;
+    }
 
     await appendLog(
       deploymentId,
@@ -1645,9 +1755,7 @@ async function runServiceDeployment(
       throw new Error(`Failed to sync Caddy config: ${syncErrorMessage}`);
     }
 
-    await updateRollbackEligible(service.id);
-
-    await drainPreviousDeployments(
+    await finalizeLiveDeployment(
       deploymentId,
       service.id,
       effectiveService.drainTimeout ?? 30,
@@ -1697,11 +1805,58 @@ async function runServiceDeployment(
       console.warn("Failed to update PR comment:", err);
     }
   } finally {
+    if (clonedRepoPath) {
+      removeClonedRepo(clonedRepoPath);
+    }
     await releaseServiceDeploymentClaim(claim);
   }
 }
 
 const ROLLBACK_ELIGIBLE_COUNT = 5;
+
+async function finalizeLiveDeployment(
+  deploymentId: string,
+  serviceId: string,
+  drainTimeout: number,
+  shutdownTimeout: number,
+): Promise<void> {
+  try {
+    await updateRollbackEligible(serviceId);
+  } catch (err) {
+    await logPostSwitchWarning(
+      deploymentId,
+      "Failed to update rollback eligibility",
+      err,
+    );
+  }
+
+  try {
+    await drainPreviousDeployments(
+      deploymentId,
+      serviceId,
+      drainTimeout,
+      shutdownTimeout,
+    );
+  } catch (err) {
+    await logPostSwitchWarning(
+      deploymentId,
+      "Failed to drain previous deployment",
+      err,
+    );
+  }
+}
+
+async function logPostSwitchWarning(
+  deploymentId: string,
+  context: string,
+  err: unknown,
+): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  console.warn(`[deploy ${deploymentId}] ${context}:`, err);
+  try {
+    await appendLog(deploymentId, `\nWarning: ${context}: ${message}\n`);
+  } catch {}
+}
 
 async function updateRollbackEligible(serviceId: string): Promise<void> {
   const service = await db
@@ -1779,6 +1934,13 @@ export async function rollbackDeployment(
     throw new Error("Cannot rollback services with volumes");
   }
 
+  if (
+    targetDeployment.id === service.currentDeploymentId ||
+    targetDeployment.status === "running"
+  ) {
+    throw new Error("Deployment is already running");
+  }
+
   const environment = await db
     .selectFrom("environments")
     .selectAll()
@@ -1810,7 +1972,13 @@ export async function rollbackDeployment(
 
     await db
       .updateTable("deployments")
-      .set({ status: "deploying", trigger: "rollback" })
+      .set({
+        status: "deploying",
+        trigger: "rollback",
+        createdAt: Date.now(),
+        finishedAt: null,
+        errorMessage: null,
+      })
       .where("id", "=", deploymentId)
       .execute();
 
@@ -1858,20 +2026,6 @@ async function runRollbackDeployment(
   const networkName = sanitizeDockerName(
     `frost-net-${project.id}-${environment.id}`,
   );
-  let effectiveService = service;
-  const sourceDeploymentRepoPath = join(REPOS_PATH, sourceDeployment.id);
-  const frostConfigResult = loadFrostConfig(
-    sourceDeploymentRepoPath,
-    service.frostFilePath ?? "frost.yaml",
-  );
-
-  if (frostConfigResult.config) {
-    effectiveService = mergeConfigWithService(
-      effectiveService,
-      frostConfigResult.config,
-    );
-  }
-
   const baseLabels = {
     "frost.managed": "true",
     "frost.project.id": project.id,
@@ -1921,6 +2075,7 @@ async function runRollbackDeployment(
         deploymentId,
         service,
         sourceDeployment.gitBranch ?? service.branch,
+        getRemainingTimeoutMs(),
       );
     } catch (err: any) {
       await appendLog(
@@ -1971,12 +2126,18 @@ async function runRollbackDeployment(
     }
 
     const firstReplica = startedReplicas[0];
-    await markDeploymentRunningAndSetCurrentServiceDeployment(
-      deploymentId,
-      service.id,
-      firstReplica.containerId,
-      firstReplica.hostPort,
-    );
+    const markedRunning =
+      await markDeploymentRunningAndSetCurrentServiceDeployment(
+        deploymentId,
+        service.id,
+        firstReplica.containerId,
+        firstReplica.hostPort,
+        claim,
+      );
+    if (!markedRunning) {
+      await cleanupCancelledDeployment(deploymentId);
+      return;
+    }
 
     await appendLog(
       deploymentId,
@@ -1998,9 +2159,7 @@ async function runRollbackDeployment(
       throw new Error(`Failed to sync Caddy config: ${syncErrorMessage}`);
     }
 
-    await updateRollbackEligible(service.id);
-
-    await drainPreviousDeployments(
+    await finalizeLiveDeployment(
       deploymentId,
       service.id,
       effectiveService.drainTimeout ?? 30,

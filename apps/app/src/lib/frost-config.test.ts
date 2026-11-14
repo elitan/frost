@@ -205,3 +205,21 @@ describe("mergeConfigWithService", () => {
     expect(result.replicaCount).toBe(1);
   });
 });
+
+describe("mergeConfigWithService replicas with volumes", () => {
+  test("rejects replicas > 1 when service has volumes", () => {
+    const service = {
+      ...makeService({ replicaCount: 1 }),
+      volumes: JSON.stringify([{ name: "data", path: "/data" }]),
+    };
+    expect(() =>
+      mergeConfigWithService(service, { deploy: { replicas: 2 } }),
+    ).toThrow(/volumes/);
+  });
+
+  test("allows replicas > 1 without volumes", () => {
+    const service = { ...makeService({ replicaCount: 1 }), volumes: "[]" };
+    const result = mergeConfigWithService(service, { deploy: { replicas: 2 } });
+    expect(result.replicaCount).toBe(2);
+  });
+});
