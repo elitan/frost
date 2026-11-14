@@ -89,8 +89,12 @@ export async function fetchLatestRelease(): Promise<GitHubRelease | null> {
 
     return (await res.json()) as GitHubRelease;
   } catch (err) {
+    // Surface network/API failures so callers can report "check failed"
+    // instead of claiming the instance is up to date.
     console.error("Failed to fetch latest release:", err);
-    return null;
+    throw err instanceof Error
+      ? err
+      : new Error("Failed to fetch latest release");
   }
 }
 
@@ -172,6 +176,7 @@ export async function checkForUpdate(
     };
   }
 
+  // Throws on network/API failure; last_check is only recorded on success.
   const release = await fetchLatestRelease();
   const now = Date.now();
 

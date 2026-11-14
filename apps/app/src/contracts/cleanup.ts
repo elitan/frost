@@ -5,6 +5,8 @@ const cleanupSettingsSchema = z.object({
   enabled: z.boolean(),
   schedule: z.string(),
   retentionDays: z.number(),
+  pruneDangling: z.boolean(),
+  pruneNetworks: z.boolean(),
   running: z.boolean(),
   lastRun: z.string().nullable(),
   lastResult: z.string().nullable(),
@@ -22,6 +24,8 @@ export const cleanupContract = {
         enabled: z.boolean().optional(),
         schedule: z.string().optional(),
         retentionDays: z.number().optional(),
+        pruneDangling: z.boolean().optional(),
+        pruneNetworks: z.boolean().optional(),
       }),
     )
     .output(cleanupSettingsSchema),

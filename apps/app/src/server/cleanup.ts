@@ -14,6 +14,8 @@ function formatSettings(
     enabled: settings.enabled,
     schedule: "daily" as const,
     retentionDays: settings.keepImages,
+    pruneDangling: settings.pruneDangling,
+    pruneNetworks: settings.pruneNetworks,
     running: settings.running,
     lastRun: settings.lastRun,
     lastResult: settings.lastResult
@@ -34,6 +36,8 @@ export const cleanup = {
     await updateCleanupSettings({
       enabled: input.enabled,
       keepImages: input.retentionDays,
+      pruneDangling: input.pruneDangling,
+      pruneNetworks: input.pruneNetworks,
     });
     const settings = await getCleanupSettings();
     return formatSettings(settings);

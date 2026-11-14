@@ -1,3 +1,4 @@
+import { ORPCError } from "@orpc/server";
 import { getSetting, setSetting } from "@/lib/auth";
 import { isAutoUpdateEnabled } from "@/lib/update-state";
 import {
@@ -44,7 +45,16 @@ export const updates = {
   }),
 
   check: os.updates.check.handler(async () => {
-    const result = await checkForUpdate(true);
+    let result: Awaited<ReturnType<typeof checkForUpdate>>;
+    try {
+      result = await checkForUpdate(true);
+    } catch (error) {
+      throw new ORPCError("BAD_GATEWAY", {
+        message: `Could not reach GitHub to check for updates${
+          error instanceof Error ? `: ${error.message}` : ""
+        }`,
+      });
+    }
     if (!result) {
       return {
         currentVersion: getCurrentVersion(),
