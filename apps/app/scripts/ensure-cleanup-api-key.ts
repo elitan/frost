@@ -27,6 +27,7 @@ const keyFile =
   process.env.FROST_CLEANUP_API_KEY_FILE ??
   join(getDataDir(), ".cleanup-api-key");
 const db = new Database(getDbPath());
+db.exec("PRAGMA busy_timeout = 10000");
 
 function readExistingKey(): string | null {
   if (!existsSync(keyFile)) return null;

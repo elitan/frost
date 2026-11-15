@@ -12,6 +12,8 @@ if (!jwtSecret) {
 }
 
 const db = new Database(dbPath);
+// Frost may be writing during startup; wait for its lock instead of failing.
+db.exec("PRAGMA busy_timeout = 10000");
 const key = createStoredApiKey(db, name, jwtSecret);
 db.close();
 

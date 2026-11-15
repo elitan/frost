@@ -502,10 +502,21 @@ echo -e "${YELLOW}Note: Browser will show certificate warning (self-signed). Cli
 if [ "$CREATE_API_KEY" = true ]; then
   echo ""
   timer "Creating API key..."
-  if [ "$USE_TARBALL" = true ]; then
-    FROST_API_KEY=$(FROST_JWT_SECRET="$FROST_JWT_SECRET" FROST_DATA_DIR="$FROST_DIR/data" bun scripts/create-api-key.ts install)
-  else
-    FROST_API_KEY=$(FROST_JWT_SECRET="$FROST_JWT_SECRET" FROST_DATA_DIR="$FROST_DIR/data" bun --cwd apps/app scripts/create-api-key.ts install)
+  # Frost may still hold the SQLite write lock while it starts up; older
+  # releases' key script has no busy timeout, so retry a few times.
+  FROST_API_KEY=""
+  for attempt in 1 2 3 4 5; do
+    if [ "$USE_TARBALL" = true ]; then
+      FROST_API_KEY=$(FROST_JWT_SECRET="$FROST_JWT_SECRET" FROST_DATA_DIR="$FROST_DIR/data" bun scripts/create-api-key.ts install) && break
+    else
+      FROST_API_KEY=$(FROST_JWT_SECRET="$FROST_JWT_SECRET" FROST_DATA_DIR="$FROST_DIR/data" bun --cwd apps/app scripts/create-api-key.ts install) && break
+    fi
+    FROST_API_KEY=""
+    sleep "$attempt"
+  done
+  if [ -z "$FROST_API_KEY" ]; then
+    echo -e "${RED}Failed to create API key${NC}"
+    exit 1
   fi
   echo -e "API Key: ${YELLOW}$FROST_API_KEY${NC}"
   echo "(use with X-Frost-Token header)"
