@@ -41,6 +41,8 @@ Idle connections in a pool don't keep it awake. When a database sleeps, Frost cl
 
 With scale to zero on, a branch you stop by hand also starts again on the next connection. Turning scale to zero off starts a sleeping branch.
 
+The proxy reaches Frost on port 3091 of the Docker bridge (e.g. `172.17.0.1`). If you run a host firewall that blocks traffic from containers to the host, allow that port from Docker's networks, or connections to a sleeping database will wait and then fail.
+
 ## Limitations
 
 - Only requests to an app service's **domains** wake it. Requests from other services over the project network, or straight to its host port, do not. Set internal-only services (e.g. an API only other services call) and background workers to **Always on**. (Postgres databases are different, see above.)

@@ -337,7 +337,7 @@ export async function sleepService(
       }
     }
     lastNetworkBytes.delete(service.deploymentId);
-    // EXPERIMENT: a stand-in under the service's internal hostname so
+    // A stand-in under the service's internal hostname so
     // connections from other services wake it too.
     try {
       await deps.startActivator(serviceId);

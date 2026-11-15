@@ -233,6 +233,29 @@ get_public_ipv4() {
   return 1
 }
 
+# Wake proxy for scale to zero (internal wake, Postgres). Source installs
+# build it from this checkout; releases pull the image published with the
+# release. Not fatal: without it, services wake only through their domains and
+# Postgres branches sleep without a proxy. Keep in sync with update.sh.
+ensure_activator_image() {
+  local env_file="$FROST_DIR/.env"
+  sed -i '/^FROST_ACTIVATOR_IMAGE=frost-activator:source$/d' "$env_file" 2>/dev/null || true
+  if [ -f "$FROST_DIR/apps/activator/Dockerfile" ]; then
+    if docker build -q -t frost-activator:source "$FROST_DIR/apps/activator" > /dev/null; then
+      echo "FROST_ACTIVATOR_IMAGE=frost-activator:source" >> "$env_file"
+    else
+      echo -e "${YELLOW}Warning: could not build the wake proxy image; internal wake disabled${NC}"
+    fi
+    return 0
+  fi
+  local version
+  version=$(grep '"version"' "$FROST_DIR/package.json" 2>/dev/null | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+  if [ -n "$version" ] && docker pull -q "ghcr.io/elitan/frost-activator:$version" > /dev/null 2>&1; then
+    return 0
+  fi
+  echo -e "${YELLOW}Warning: could not pull ghcr.io/elitan/frost-activator:$version; Frost retries on first use${NC}"
+}
+
 detect_single_zfs_pool() {
   if ! command -v zpool &> /dev/null; then
     return 0
@@ -396,6 +419,9 @@ EOF
 if [ "$USE_TARBALL" = false ] && [ -d "$FROST_DIR/apps/app" ]; then
   ln -sf "$FROST_DIR/.env" "$FROST_DIR/apps/app/.env"
 fi
+
+timer "Preparing the wake proxy image..."
+ensure_activator_image
 
 timer "Running migrations..."
 bun run migrate

@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { Server } from "node:http";
 import { promisify } from "node:util";
 import {
   createDatabase,
@@ -19,11 +18,13 @@ import {
   readContainerNetworkAliases,
 } from "./database-target-proxy";
 import { db } from "./db";
-import { createActivatorControlServer } from "./service-activator";
+import {
+  startActivatorControlServer,
+  stopActivatorControlServer,
+} from "./service-activator";
 
 /**
- * EXPERIMENT: scale-to-zero Postgres behind the resident proxy, against real
- * Docker. Needs the activator image (apps/activator/build.sh); skipped
+ * Scale-to-zero Postgres behind the resident proxy, against real Docker. Needs the activator image (apps/activator/build.sh); skipped
  * otherwise. Takes a few minutes: one check waits out a real idle minute.
  */
 
@@ -45,7 +46,6 @@ async function containerState(name: string): Promise<string | null> {
 }
 
 describe.skipIf(!hasImage)("database target proxy (docker)", () => {
-  let server: Server;
   // Short ids keep the network name under Docker's 63-character cap.
   const projectId = `proj-${randomUUID().slice(0, 8)}`;
   const environmentId = `env-${randomUUID().slice(0, 8)}`;
@@ -121,17 +121,12 @@ describe.skipIf(!hasImage)("database target proxy (docker)", () => {
   }
 
   beforeAll(async () => {
-    server = createActivatorControlServer({
+    process.env.FROST_ACTIVATOR_IMAGE = IMAGE;
+    process.env.FROST_ACTIVATOR_PORT = "0";
+    await startActivatorControlServer({
       ensureServiceAwake: async () => [],
       wakeDatabaseTarget: wakeDatabaseTargetForProxy,
     });
-    const port = await new Promise<number>((resolve) => {
-      server.listen(0, "0.0.0.0", () => {
-        const address = server.address();
-        resolve(typeof address === "object" && address ? address.port : 0);
-      });
-    });
-    process.env.FROST_ACTIVATOR_PORT = String(port);
 
     const now = Date.now();
     await db
@@ -181,7 +176,7 @@ describe.skipIf(!hasImage)("database target proxy (docker)", () => {
     }
     await docker("network", "rm", network).catch(() => {});
     await db.deleteFrom("projects").where("id", "=", projectId).execute();
-    await new Promise((resolve) => server.close(resolve));
+    await stopActivatorControlServer();
   }, 180_000);
 
   test("main can scale to zero; the proxy takes over its hostnames", async () => {
@@ -308,5 +303,50 @@ describe.skipIf(!hasImage)("database target proxy (docker)", () => {
       await containerState(getDatabaseProxyContainerName(mainTargetId)),
     ).toBeNull();
     expect(await psql("pdb.frost.internal", "select 'direct'")).toBe("direct");
+  }, 240_000);
+
+  test("without a proxy image the target keeps its hostnames and sleeps as before", async () => {
+    process.env.FROST_ACTIVATOR_IMAGE =
+      "frost-activator:missing-image-for-test";
+    try {
+      await patchDatabaseTargetRuntimeSettings({
+        targetId: mainTargetId,
+        scaleToZeroMinutes: 1,
+      });
+      expect(
+        await containerState(getDatabaseProxyContainerName(mainTargetId)),
+      ).toBeNull();
+      expect(await psql("pdb.frost.internal", "select 'fallback'")).toBe(
+        "fallback",
+      );
+
+      // Still never under an open transaction.
+      const session = await openSession("pdb.frost.internal");
+      await session.send("begin; select 1;");
+      await Bun.sleep(1500);
+      expect(
+        await withDatabaseTargetLock(mainTargetId, () =>
+          sleepIdleDatabaseTargetUnlocked({
+            databaseId,
+            targetId: mainTargetId,
+          }),
+        ),
+      ).toBe(false);
+      await session.send("commit;");
+      await docker("rm", "-f", sessions[sessions.length - 1] ?? "");
+      await Bun.sleep(1000);
+
+      expect(
+        await withDatabaseTargetLock(mainTargetId, () =>
+          sleepIdleDatabaseTargetUnlocked({
+            databaseId,
+            targetId: mainTargetId,
+          }),
+        ),
+      ).toBe(true);
+      expect(await targetStatus(mainTargetId)).toBe("stopped");
+    } finally {
+      process.env.FROST_ACTIVATOR_IMAGE = IMAGE;
+    }
   }, 240_000);
 });

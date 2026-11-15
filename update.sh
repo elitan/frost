@@ -361,6 +361,29 @@ ensure_zfs_branching_setup() {
 }
 
 
+# Wake proxy for scale to zero (internal wake, Postgres). Source installs
+# build it from this checkout; releases pull the image published with the
+# release. Not fatal: without it, services wake only through their domains and
+# Postgres branches sleep without a proxy. Keep in sync with install.sh.
+ensure_activator_image() {
+  local env_file="$FROST_DIR/.env"
+  sed -i '/^FROST_ACTIVATOR_IMAGE=frost-activator:source$/d' "$env_file" 2>/dev/null || true
+  if [ -f "$FROST_DIR/apps/activator/Dockerfile" ]; then
+    if docker build -q -t frost-activator:source "$FROST_DIR/apps/activator" > /dev/null; then
+      echo "FROST_ACTIVATOR_IMAGE=frost-activator:source" >> "$env_file"
+    else
+      log "Warning: could not build the wake proxy image; internal wake disabled"
+    fi
+    return 0
+  fi
+  local version
+  version=$(grep '"version"' "$FROST_DIR/package.json" 2>/dev/null | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+  if [ -n "$version" ] && docker pull -q "ghcr.io/elitan/frost-activator:$version" > /dev/null 2>&1; then
+    return 0
+  fi
+  log "Warning: could not pull ghcr.io/elitan/frost-activator:$version; Frost retries on first use"
+}
+
 get_package_version() {
   local file="$1"
   grep '"version"' "$file" 2>/dev/null | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/'
@@ -1090,6 +1113,9 @@ else
 
   NEW_VERSION=$(get_package_version package.json)
 fi
+
+log "Preparing the wake proxy image..."
+ensure_activator_image
 
 log "Backing up SQLite database..."
 backup_sqlite_db

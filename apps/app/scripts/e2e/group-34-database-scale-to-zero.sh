@@ -1,19 +1,14 @@
 #!/bin/bash
-# EXPERIMENT: scale-to-zero Postgres (main) behind the resident proxy.
-# Uses the real scheduler; set FROST_DATABASE_POLICY_INTERVAL_MS low (the
-# managed e2e runner uses 5s). Takes ~5 minutes: idle checks need real minutes.
+# Scale-to-zero Postgres (main) behind the resident proxy.
+# Uses the real scheduler (60s ticks by default; the managed local runner
+# uses 5s). Takes 5-8 minutes: idle checks need real minutes.
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 log "=== Database scale to zero (proxy) ==="
 
-ACTIVATOR_IMAGE="${FROST_ACTIVATOR_IMAGE:-frost-activator:dev}"
-if ! remote "docker image inspect $ACTIVATOR_IMAGE > /dev/null 2>&1"; then
-  log "Activator image $ACTIVATOR_IMAGE not present; skipping (build apps/activator first)"
-  pass
-  exit 0
-fi
+require_activator_image
 
 PROJECT=$(api -X POST "$BASE_URL/api/projects" -d '{"name":"e2e-db-scale-to-zero"}')
 PROJECT_ID=$(require_field "$PROJECT" '.id' "create project") || fail "Failed to create project"
@@ -94,7 +89,7 @@ log "Test 3 passed"
 log "Test 4: sleeps under an idle session"
 IDLE=$(open_session)
 session_send "$IDLE" "select 'warm';"
-wait_status stopped 60 || fail "Did not sleep under an idle session (status $(status))"
+wait_status stopped 120 || fail "Did not sleep under an idle session (status $(status))"
 [ "$(remote "docker inspect -f '{{.State.Running}}' $PROXY")" = "true" ] || fail "Proxy gone after sleep"
 log "Test 4 passed"
 

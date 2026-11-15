@@ -4,12 +4,13 @@ import { promisify } from "node:util";
 import {
   activatorToken,
   getActivatorControlPort,
+  getActivatorHostGateway,
   getActivatorImage,
 } from "./service-activator";
 import { shellEscape } from "./shell-escape";
 
 /**
- * EXPERIMENT: a resident proxy (apps/activator in resident mode) in front of
+ * A resident proxy (apps/activator in resident mode) in front of
  * each scale-to-zero Postgres target.
  *
  * The proxy owns the target's internal hostnames on every environment network
@@ -126,6 +127,10 @@ export async function ensureDatabaseProxy(input: {
     return;
   }
   const containerName = getDatabaseProxyContainerName(input.targetId);
+  const hostGateway = getActivatorHostGateway();
+  if (!hostGateway) {
+    throw new Error("The wake endpoint is not listening");
+  }
   const wakeUrl = `http://host.docker.internal:${getActivatorControlPort()}/activate/target/${input.targetId}`;
   const token = getDatabaseProxyToken(input.targetId);
   // Changes to any of these (e.g. a new activator image after an upgrade)
@@ -142,7 +147,7 @@ export async function ensureDatabaseProxy(input: {
     () => image,
   );
   const config = createHash("sha256")
-    .update(JSON.stringify([imageId, input.port, wakeUrl, token]))
+    .update(JSON.stringify([imageId, input.port, wakeUrl, hostGateway, token]))
     .digest("hex")
     .slice(0, 16);
   const existing = await readContainerNetworkAliases(containerName);
@@ -164,7 +169,7 @@ export async function ensureDatabaseProxy(input: {
       first.network,
       ...first.aliases.flatMap((alias) => ["--network-alias", alias]),
       "--add-host",
-      "host.docker.internal:host-gateway",
+      hostGateway,
       "--restart",
       "unless-stopped",
       "--label",
@@ -192,11 +197,15 @@ export async function ensureDatabaseProxy(input: {
       `ACTIVATOR_PORTS=${input.port}`,
       "-e",
       `ACTIVATOR_WAKE_URL=${wakeUrl}`,
+      // Value from our environment, so it never appears in a command line
+      // or an error message.
       "-e",
-      `ACTIVATOR_TOKEN=${token}`,
+      "ACTIVATOR_TOKEN",
       image,
     ];
-    await execFileAsync("docker", args);
+    await execFileAsync("docker", args, {
+      env: { ...process.env, ACTIVATOR_TOKEN: token },
+    });
     current = new Map([[first.network, first.aliases]]);
   }
 
@@ -300,4 +309,13 @@ export async function controlDatabaseProxy(
       reply: stdout || (error instanceof Error ? error.message : "failed"),
     };
   }
+}
+
+export async function isDatabaseProxyRunning(
+  targetId: string,
+): Promise<boolean> {
+  const info = await readContainerNetworkAliases(
+    getDatabaseProxyContainerName(targetId),
+  );
+  return info?.running === true;
 }

@@ -3,13 +3,14 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { isIP } from "node:net";
 import { promisify } from "node:util";
+import pkg from "../../package.json";
 import { db } from "./db";
 import { getRequiredJwtSecret } from "./jwt-secret";
 import { shellEscape } from "./shell-escape";
 import { slugify } from "./slugify";
 
 /**
- * EXPERIMENT: internal wake for scale-to-zero.
+ * Internal wake for scale-to-zero.
  *
  * Containers reach each other by `<hostname>.frost.internal` on their Docker
  * network, which never passes through Caddy. While a service sleeps, Frost
@@ -21,18 +22,93 @@ import { slugify } from "./slugify";
 
 const execAsync = promisify(exec);
 
+const globalForActivator = globalThis as typeof globalThis & {
+  frostActivatorControlServer?: Server;
+  /** Set once the wake endpoint listens; proxies are only started then. */
+  frostActivatorEndpoint?: ActivatorEndpoint;
+};
+
 const ACTIVATOR_LABEL = "frost.activator";
 const DEFAULT_CONTROL_PORT = 3091;
 
+/**
+ * The wake proxy image: published with each release (install and update
+ * pull it; source installs build it and set FROST_ACTIVATOR_IMAGE).
+ */
 export function getActivatorImage(): string {
-  return process.env.FROST_ACTIVATOR_IMAGE || "frost-activator:dev";
+  return (
+    process.env.FROST_ACTIVATOR_IMAGE ||
+    `ghcr.io/elitan/frost-activator:${pkg.version}`
+  );
 }
 
-export function getActivatorControlPort(): number {
+function getConfiguredControlPort(): number {
   const port = Number.parseInt(process.env.FROST_ACTIVATOR_PORT ?? "", 10);
-  return Number.isInteger(port) && port > 0 && port < 65536
+  return Number.isInteger(port) && port >= 0 && port < 65536
     ? port
     : DEFAULT_CONTROL_PORT;
+}
+
+/** The port the wake endpoint listens on (the bound one once started). */
+export function getActivatorControlPort(): number {
+  return (
+    globalForActivator.frostActivatorEndpoint?.port ??
+    getConfiguredControlPort()
+  );
+}
+
+export interface ActivatorEndpoint {
+  /** Address the wake endpoint listens on. */
+  bindHost: string;
+  /** What containers map host.docker.internal to (an IP or host-gateway). */
+  hostGateway: string;
+  port: number;
+}
+
+/**
+ * Where containers can reach the wake endpoint without exposing it outside
+ * the host. On Linux both sides use the default Docker bridge's gateway IP:
+ * every container network reaches it through the host, the internet doesn't.
+ * Docker Desktop forwards host-gateway to the host's loopback.
+ * FROST_ACTIVATOR_HOST overrides the bind address.
+ */
+export async function resolveActivatorEndpoint(
+  port: number,
+): Promise<ActivatorEndpoint> {
+  const override = process.env.FROST_ACTIVATOR_HOST;
+  if (override) {
+    const specific =
+      isIP(override) !== 0 &&
+      !["0.0.0.0", "::", "127.0.0.1", "::1"].includes(override);
+    return {
+      bindHost: override,
+      hostGateway: specific ? override : "host-gateway",
+      port,
+    };
+  }
+  if (process.platform !== "linux") {
+    return { bindHost: "127.0.0.1", hostGateway: "host-gateway", port };
+  }
+  const { stdout } = await execAsync(
+    `docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}'`,
+  );
+  const gateway = stdout
+    .trim()
+    .split(/\s+/)
+    .find((ip) => isIP(ip) === 4);
+  if (!gateway) {
+    throw new Error("The default Docker bridge has no IPv4 gateway");
+  }
+  return { bindHost: gateway, hostGateway: gateway, port };
+}
+
+/**
+ * The --add-host value for wake proxies, or null while the wake endpoint
+ * isn't listening (proxies then aren't started: nothing could wake them).
+ */
+export function getActivatorHostGateway(): string | null {
+  const endpoint = globalForActivator.frostActivatorEndpoint;
+  return endpoint ? `host.docker.internal:${endpoint.hostGateway}` : null;
 }
 
 export function activatorContainerName(serviceId: string): string {
@@ -154,7 +230,8 @@ export async function stopServiceActivator(serviceId: string): Promise<void> {
 export async function startServiceActivator(serviceId: string): Promise<void> {
   const target = await getActivatorTarget(serviceId);
   const firstContainer = target?.containerIds[0];
-  if (!target || !firstContainer) return;
+  const hostGateway = getActivatorHostGateway();
+  if (!target || !firstContainer || !hostGateway) return;
   const network = await getContainerNetwork(firstContainer);
   await stopServiceActivator(serviceId);
   const args = [
@@ -168,7 +245,7 @@ export async function startServiceActivator(serviceId: string): Promise<void> {
     "--network-alias",
     `${target.hostname}.frost.internal`,
     "--add-host",
-    "host.docker.internal:host-gateway",
+    hostGateway,
     "--label",
     `${ACTIVATOR_LABEL}=true`,
     // Removed with the service by cleanupService (stopContainersByLabel).
@@ -187,11 +264,15 @@ export async function startServiceActivator(serviceId: string): Promise<void> {
     `ACTIVATOR_PORTS=${target.containerPort}`,
     "-e",
     `ACTIVATOR_WAKE_URL=http://host.docker.internal:${getActivatorControlPort()}/activate/${serviceId}`,
+    // Value from our environment, so it never appears in a command line or
+    // an error message.
     "-e",
-    `ACTIVATOR_TOKEN=${activatorToken(serviceId)}`,
+    "ACTIVATOR_TOKEN",
     getActivatorImage(),
   ];
-  await execAsync(`docker ${args.map(shellEscape).join(" ")}`);
+  await execAsync(`docker ${args.map(shellEscape).join(" ")}`, {
+    env: { ...process.env, ACTIVATOR_TOKEN: activatorToken(serviceId) },
+  });
 }
 
 async function getActivatorState(serviceId: string): Promise<string | null> {
@@ -326,29 +407,38 @@ export function createActivatorControlServer(
   return server;
 }
 
-const globalForActivator = globalThis as typeof globalThis & {
-  frostActivatorControlServer?: Server;
-};
-
-export function startActivatorControlServer(
+export async function startActivatorControlServer(
   options: ActivatorControlOptions,
-): Promise<number> {
-  const port = getActivatorControlPort();
-  if (globalForActivator.frostActivatorControlServer) {
-    return Promise.resolve(port);
+): Promise<ActivatorEndpoint> {
+  const running = globalForActivator.frostActivatorEndpoint;
+  if (globalForActivator.frostActivatorControlServer && running) {
+    return running;
   }
+  const endpoint = await resolveActivatorEndpoint(getConfiguredControlPort());
   const server = createActivatorControlServer(options);
   globalForActivator.frostActivatorControlServer = server;
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     server.once("error", (error) => {
       globalForActivator.frostActivatorControlServer = undefined;
       reject(error);
     });
-    // Containers reach the host through their network's gateway address, so
-    // this can't be loopback-only; requests need a per-service token and a
-    // private source address.
-    server.listen(port, process.env.FROST_ACTIVATOR_HOST || "0.0.0.0", () =>
-      resolve(port),
-    );
+    // Requests also need a per-service token and a private source address.
+    server.listen(endpoint.port, endpoint.bindHost, () => resolve());
   });
+  const address = server.address();
+  const bound: ActivatorEndpoint = {
+    ...endpoint,
+    port: typeof address === "object" && address ? address.port : endpoint.port,
+  };
+  globalForActivator.frostActivatorEndpoint = bound;
+  return bound;
+}
+
+export async function stopActivatorControlServer(): Promise<void> {
+  const server = globalForActivator.frostActivatorControlServer;
+  globalForActivator.frostActivatorControlServer = undefined;
+  globalForActivator.frostActivatorEndpoint = undefined;
+  if (server) {
+    await new Promise((resolve) => server.close(resolve));
+  }
 }

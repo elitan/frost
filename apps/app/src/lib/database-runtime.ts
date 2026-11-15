@@ -20,6 +20,7 @@ import {
 import {
   controlDatabaseProxy,
   ensureDatabaseProxy,
+  isDatabaseProxyRunning,
   listDatabaseProxyTargetIds,
   readContainerNetworkAliases,
   removeDatabaseProxy,
@@ -2119,12 +2120,31 @@ export async function sleepIdleDatabaseTargetUnlocked(input: {
   const providerRef = parseProviderRef(target.providerRefJson);
   const status = await controlDatabaseProxy(target.id, "status");
   if (!status.ok) {
-    // Without a working proxy nothing could wake the target internally.
-    console.warn("[database-runtime] Proxy not answering; staying awake", {
-      targetId: target.id,
-      reply: status.reply,
-    });
-    return false;
+    if (await isDatabaseProxyRunning(target.id)) {
+      // It holds the hostnames but doesn't answer: sleeping now could leave
+      // nothing able to wake the target. Try again next tick.
+      console.warn("[database-runtime] Proxy not answering; staying awake", {
+        targetId: target.id,
+        reply: status.reply,
+      });
+      return false;
+    }
+    // No proxy (image unavailable, wake endpoint down): the target owns its
+    // hostnames and sleeps as before, waking through its public port. Still
+    // never under a running query or open transaction.
+    const activity = await getPostgresTargetActivity(providerRef);
+    if (
+      !isTargetIdleEnough({ activity, proxyIdleSeconds: null, minIdleSeconds })
+    ) {
+      await recordObservedActivity({
+        target,
+        activity,
+        proxyIdleSeconds: null,
+      });
+      return false;
+    }
+    await stopDatabaseTargetUnlocked({ ...input, stoppedReason: "idle" });
+    return true;
   }
   const proxyIdleSeconds = parseProxyIdleSeconds(status.reply);
   const before = await getPostgresTargetActivity(providerRef);

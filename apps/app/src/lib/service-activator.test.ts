@@ -6,6 +6,7 @@ import {
   createActivatorControlServer,
   isPrivateAddress,
   isValidActivatorToken,
+  resolveActivatorEndpoint,
 } from "./service-activator";
 
 describe("activator tokens", () => {
@@ -130,4 +131,40 @@ describe("activator control server", () => {
     expect(await ok.text()).toBe("frost-db-dbt_1\n");
     expect(woken).toEqual(["target:dbt_1"]);
   });
+});
+
+describe("resolveActivatorEndpoint", () => {
+  const original = process.env.FROST_ACTIVATOR_HOST;
+  afterEach(() => {
+    if (original === undefined) delete process.env.FROST_ACTIVATOR_HOST;
+    else process.env.FROST_ACTIVATOR_HOST = original;
+  });
+
+  test("a specific override address is used by both sides", async () => {
+    process.env.FROST_ACTIVATOR_HOST = "10.0.0.1";
+    expect(await resolveActivatorEndpoint(3091)).toEqual({
+      bindHost: "10.0.0.1",
+      hostGateway: "10.0.0.1",
+      port: 3091,
+    });
+  });
+
+  test("a wildcard or loopback override leaves containers on host-gateway", async () => {
+    process.env.FROST_ACTIVATOR_HOST = "0.0.0.0";
+    expect((await resolveActivatorEndpoint(3091)).hostGateway).toBe(
+      "host-gateway",
+    );
+  });
+
+  test.skipIf(process.platform === "linux")(
+    "Docker Desktop binds loopback only",
+    async () => {
+      delete process.env.FROST_ACTIVATOR_HOST;
+      expect(await resolveActivatorEndpoint(3091)).toEqual({
+        bindHost: "127.0.0.1",
+        hostGateway: "host-gateway",
+        port: 3091,
+      });
+    },
+  );
 });

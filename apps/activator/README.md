@@ -1,4 +1,4 @@
-# frost-activator (experiment)
+# frost-activator
 
 Wakes sleeping (scale-to-zero) workloads on connection. Two modes:
 
@@ -18,7 +18,8 @@ container stops, Docker drops the name, so callers used to get errors.
    on the service's network, under the same `<hostname>.frost.internal` alias
    and listening on the service's container port.
 2. The first connection makes the activator call
-   `POST http://host.docker.internal:3091/activate/<serviceId>` with a
+   `POST http://host.docker.internal:3091/activate/<serviceId>` (see
+   [Wake endpoint](#wake-endpoint)) with a
    per-service token (HMAC of the service id with Frost's JWT secret). Frost
    also requires a private source address.
 3. Frost wakes the service (start containers, health check) and answers with
@@ -60,30 +61,48 @@ Design notes:
 
 E2E: `scripts/e2e/group-33-internal-wake.sh` (skips when the image is absent).
 
-## Build
+## Build and distribution
 
 ```bash
-apps/activator/build.sh            # host arch (aarch64 on Apple silicon)
-apps/activator/build.sh x86_64     # needs: rustup target add x86_64-unknown-linux-musl
+apps/activator/build.sh                      # frost-activator:dev for this machine
+docker buildx build --platform linux/amd64,linux/arm64 apps/activator
 ```
 
-## Open issues before shipping
+The Dockerfile cross-compiles with `rust-lld` on the build machine's
+architecture (no emulation) into a `scratch` image.
 
-- **Distribution.** Installs don't have Rust. Publish a multi-arch image
-  (amd64/arm64) from CI, e.g. GHCR, pinned by digest in Frost.
-- **Control port exposure.** The control server binds `0.0.0.0:3091` so
-  containers can reach it through their network gateway. Requests need a
-  per-service token and a private source address, but binding only to the
-  Docker bridge gateways (or a firewall rule) would be tighter.
-- **Stale pooled connections (Postgres).** Idle detection counts traffic, so a
-  database whose clients hold idle pooled connections can sleep under them;
-  the clients' next query fails and they reconnect (which wakes it). A
-  Postgres-aware idle check (`pg_stat_activity`) would avoid that.
+- **Releases** publish `ghcr.io/elitan/frost-activator:<version>` (and
+  `latest`) for amd64 and arm64. Frost uses the image matching its own
+  version; `install.sh` and `update.sh` pull it.
+- **Source installs** (`install.sh -b <branch>`, git-mode updates) build
+  `frost-activator:source` from the checkout and set `FROST_ACTIVATOR_IMAGE`.
+- `FROST_ACTIVATOR_IMAGE` overrides the image (local dev: `frost-activator:dev`).
+
+If the image isn't available, nothing breaks: sleeping services wake only
+through their domains, and Postgres branches sleep without a proxy (waking on
+their public port), as before internal wake existed.
+
+## Wake endpoint
+
+Frost listens for wake requests on port 3091 (`FROST_ACTIVATOR_PORT`):
+
+- **Linux:** on the default Docker bridge's gateway IP (e.g. `172.17.0.1`),
+  which every container network reaches through the host and the internet
+  doesn't. Proxies map `host.docker.internal` to that same IP.
+- **Docker Desktop:** on `127.0.0.1`; proxies use `host-gateway`.
+- `FROST_ACTIVATOR_HOST` overrides the bind address.
+
+Requests also need a per-service (or per-branch) token and a private source
+address. A host firewall that drops traffic from Docker networks to the host
+blocks wake-ups; allow port 3091 from Docker's address ranges.
+
+## Known limitations
+
 - **Thread per connection.** Fine for hundreds of held connections (~35 KB
   each); thousands per sleeping service would want an event loop.
-- **One activator leftover case.** If a service wakes another way (domain, API)
-  its idle stand-in stays until its first connection, then exits. Harmless,
-  but it holds ~0.5 MB until then.
+- **One leftover case (standby).** If a service wakes another way (domain,
+  API) its idle stand-in stays until its first connection, then exits.
+  Harmless, but it holds ~0.5 MB until then.
 
 ## Resident mode (Postgres)
 
@@ -142,7 +161,7 @@ Tests: `src/lib/database-target-proxy.integration.test.ts` (real Docker,
 through Frost's runtime functions) and `scripts/e2e/group-34-database-scale-to-zero.sh`
 (HTTP API + scheduler). Both skip when the image is missing.
 
-### Open issues
+### Known limitations (Postgres)
 
 - A chunk the proxy has read but not yet passed through the gate when
   `commit` takes the lock is dropped (the client sees a closed connection);

@@ -12,6 +12,9 @@ ACTIVATOR_PORT="${FROST_ACTIVATOR_PORT:-3491}"
 # Faster scale-to-zero checks so the idle-sleep e2e finishes quickly.
 SCALE_TO_ZERO_INTERVAL_MS="${FROST_SCALE_TO_ZERO_INTERVAL_MS:-5000}"
 DATABASE_POLICY_INTERVAL_MS="${FROST_DATABASE_POLICY_INTERVAL_MS:-5000}"
+# Locally built wake proxy (apps/activator/build.sh); groups needing it skip
+# when it's missing.
+export FROST_ACTIVATOR_IMAGE="${FROST_ACTIVATOR_IMAGE:-frost-activator:dev}"
 BATCH_SIZE="${1:-${E2E_BATCH_SIZE:-2}}"
 DEV_LOG="${E2E_DEV_LOG:-/tmp/frost-dev.log}"
 JWT_SECRET="${FROST_JWT_SECRET:-frost-e2e-$(openssl rand -hex 24)}"
@@ -124,6 +127,7 @@ echo "Starting local Frost dev server..."
     FROST_ACTIVATOR_PORT="$ACTIVATOR_PORT" \
     FROST_SCALE_TO_ZERO_INTERVAL_MS="$SCALE_TO_ZERO_INTERVAL_MS" \
     FROST_DATABASE_POLICY_INTERVAL_MS="$DATABASE_POLICY_INTERVAL_MS" \
+    FROST_ACTIVATOR_IMAGE="$FROST_ACTIVATOR_IMAGE" \
     bun --bun next dev -p "$PORT"
 ) > "$DEV_LOG" 2>&1 &
 DEV_PID=$!

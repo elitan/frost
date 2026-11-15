@@ -1,17 +1,12 @@
 #!/bin/bash
-# EXPERIMENT: services woken by traffic from other services (the activator).
+# Services woken by traffic from other services (the activator stand-in).
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 log "=== Internal wake (activator) ==="
 
-ACTIVATOR_IMAGE="${FROST_ACTIVATOR_IMAGE:-frost-activator:dev}"
-if ! remote "docker image inspect $ACTIVATOR_IMAGE > /dev/null 2>&1"; then
-  log "Activator image $ACTIVATOR_IMAGE not present; skipping (build apps/activator first)"
-  pass
-  exit 0
-fi
+require_activator_image
 
 service_field() {
   json_get "$(api "$BASE_URL/api/services/$1")" "$2"
