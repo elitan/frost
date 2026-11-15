@@ -1,10 +1,17 @@
-import { cleanupEnvironmentAttachments } from "./database-runtime";
+import {
+  assertDatabaseRemovable,
+  cleanupEnvironmentAttachments,
+  deleteDatabase,
+  listDatabasesByProject,
+} from "./database-runtime";
 import { db } from "./db";
 import { removeNetwork, stopContainer, stopContainersByLabel } from "./docker";
 import { syncCaddyConfig } from "./domains";
 import { removeGarageRuntimeConfig } from "./garage-runtime";
 import { removeSSLCerts } from "./ssl";
 import { buildVolumeName, removeVolume } from "./volumes";
+
+export class ProjectDeletionBlockedError extends Error {}
 
 interface ServiceForCleanup {
   id: string;
@@ -115,6 +122,24 @@ export async function cleanupEnvironment(
 }
 
 export async function cleanupProject(projectId: string): Promise<void> {
+  // Managed databases live at project level; their rows cascade with the
+  // project, but containers, storage and certs must be removed explicitly.
+  // Check all of them first so a blocked database leaves the project intact.
+  const databases = await listDatabasesByProject(projectId);
+  for (const database of databases) {
+    try {
+      await assertDatabaseRemovable(database.id);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new ProjectDeletionBlockedError(
+        `Project cannot be deleted: database "${database.name}" cannot be removed. ${reason}`,
+      );
+    }
+  }
+  for (const database of databases) {
+    await deleteDatabase(database.id);
+  }
+
   const environments = await db
     .selectFrom("environments")
     .select(["id", "projectId"])

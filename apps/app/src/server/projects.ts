@@ -10,7 +10,7 @@ import { db } from "@/lib/db";
 import { deployProject, deployService } from "@/lib/deployer";
 import { addLatestDeploymentsWithRuntimeStatus } from "@/lib/deployment-runtime";
 import { newEnvironmentId, newProjectId } from "@/lib/id";
-import { cleanupProject } from "@/lib/lifecycle";
+import { cleanupProject, ProjectDeletionBlockedError } from "@/lib/lifecycle";
 import { listObjectStoragesByProject } from "@/lib/object-storage";
 import { getProjectResourceSummary } from "@/lib/project-resource-summary";
 import { USER_FACING_SERVICE_TYPES } from "@/lib/service-visibility";
@@ -383,7 +383,14 @@ export const projects = {
   }),
 
   delete: os.projects.delete.handler(async ({ input }) => {
-    await cleanupProject(input.projectId);
+    try {
+      await cleanupProject(input.projectId);
+    } catch (error) {
+      if (error instanceof ProjectDeletionBlockedError) {
+        throw new ORPCError("CONFLICT", { message: error.message });
+      }
+      throw error;
+    }
     return { success: true };
   }),
 

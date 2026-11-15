@@ -1820,7 +1820,7 @@ export async function deleteDatabaseTargetUnlocked(input: {
   await db.deleteFrom("databaseTargets").where("id", "=", target.id).execute();
 }
 
-export async function deleteDatabase(databaseId: string): Promise<void> {
+async function loadDatabaseForDeletion(databaseId: string) {
   const database = await getDatabaseById(databaseId);
   const targets = await db
     .selectFrom("databaseTargets")
@@ -1828,14 +1828,13 @@ export async function deleteDatabase(databaseId: string): Promise<void> {
     .where("databaseId", "=", database.id)
     .execute();
 
-  const isPostgres = database.engine === "postgres";
   const parsedTargets = targets.map(function parseTarget(target) {
     return { target, providerRef: parseProviderRef(target.providerRefJson) };
   });
 
   // Branches of this database may depend on each other; only dependents
   // outside the database block removal. Check before stopping anything.
-  if (isPostgres) {
+  if (database.engine === "postgres") {
     for (const { providerRef } of parsedTargets) {
       await assertPostgresStorageRemovable(
         getPostgresStorageMetadata(providerRef),
@@ -1843,6 +1842,23 @@ export async function deleteDatabase(databaseId: string): Promise<void> {
       );
     }
   }
+
+  return { database, parsedTargets };
+}
+
+/**
+ * Throws if deleteDatabase would refuse to remove this database's storage
+ * (e.g. a branch of another database depends on it). Changes nothing.
+ */
+export async function assertDatabaseRemovable(
+  databaseId: string,
+): Promise<void> {
+  await loadDatabaseForDeletion(databaseId);
+}
+
+export async function deleteDatabase(databaseId: string): Promise<void> {
+  const { database, parsedTargets } = await loadDatabaseForDeletion(databaseId);
+  const isPostgres = database.engine === "postgres";
 
   for (const { target, providerRef } of parsedTargets) {
     await stopDatabaseTargetGateway(target.id);

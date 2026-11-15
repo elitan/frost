@@ -174,4 +174,23 @@ log "Database cleanup verified"
 log "Cleanup..."
 api -X DELETE "$BASE_URL/api/projects/$PROJECT_ID" > /dev/null
 
+log "Deleting project removes its databases..."
+PROJECT2=$(api -X POST "$BASE_URL/api/projects" -d '{"name":"e2e-database-project-delete"}')
+PROJECT2_ID=$(require_field "$PROJECT2" '.id' "create project") || fail "Failed to create project: $PROJECT2"
+DB2_CREATE=$(api -X POST "$BASE_URL/api/projects/$PROJECT2_ID/databases" \
+  -d '{"name":"postgres","engine":"postgres"}')
+DB2_ID=$(require_field "$DB2_CREATE" '.database.id' "create database") || fail "Failed to create database: $DB2_CREATE"
+DB2_BRANCH=$(api -X POST "$BASE_URL/api/databases/$DB2_ID/targets" \
+  -d '{"name":"dev","sourceTargetName":"main"}')
+require_field "$DB2_BRANCH" '.id' "create branch" > /dev/null || fail "Failed to create branch: $DB2_BRANCH"
+
+DB2_CONTAINERS=$(remote "docker ps -a --filter 'label=frost.database.id=$DB2_ID' --format '{{.Names}}' | wc -l" | tr -d ' ')
+[ "$DB2_CONTAINERS" -ge 2 ] || fail "Expected at least 2 database containers before project delete, got: $DB2_CONTAINERS"
+
+api -X DELETE "$BASE_URL/api/projects/$PROJECT2_ID" > /dev/null
+
+DB2_CONTAINERS=$(remote "docker ps -a --filter 'label=frost.database.id=$DB2_ID' --format '{{.Names}}' | wc -l" | tr -d ' ')
+[ "$DB2_CONTAINERS" = "0" ] || fail "Expected 0 database containers after project delete, got: $DB2_CONTAINERS"
+log "Project delete removed database containers"
+
 pass
