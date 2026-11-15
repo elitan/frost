@@ -49,6 +49,38 @@
           "description": "CPU limit (e.g., 0.5, 2)"
         }
       }
+    },
+    "deploy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Deployment behavior",
+      "properties": {
+        "drain_timeout": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 300,
+          "description": "Seconds old containers keep serving after a deploy"
+        },
+        "shutdown_timeout": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 300,
+          "description": "Seconds between SIGTERM and SIGKILL"
+        },
+        "replicas": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Number of container instances"
+        },
+        "scale_to_zero_minutes": {
+          "description": "Minutes without traffic before the service sleeps, or false to keep it always on",
+          "oneOf": [
+            { "type": "integer", "minimum": 1, "maximum": 10080 },
+            { "const": false }
+          ]
+        }
+      }
     }
   }
 }

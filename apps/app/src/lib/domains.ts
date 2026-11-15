@@ -8,6 +8,10 @@ import {
   parseDomainName,
 } from "./domain-validation";
 import { newDomainId } from "./id";
+import {
+  getServiceWakePort,
+  SERVICE_WAKE_HEADER,
+} from "./scale-to-zero-config";
 
 const CADDY_ADMIN = "http://localhost:2019";
 const DNS_LABEL_MAX = 63;
@@ -327,6 +331,8 @@ export interface DomainRoute {
   redirectTarget?: string;
   redirectCode?: number;
   requestTimeout?: number;
+  /** Set while the service sleeps: traffic goes to the wake server. */
+  wakeServiceId?: string;
 }
 
 export interface WildcardConfig {
@@ -355,12 +361,20 @@ export function buildCaddyConfig(
       const upstreams =
         route.type === "frost-admin"
           ? [{ dial: "localhost:3000" }]
-          : route.hostPorts.map((p) => ({ dial: `127.0.0.1:${p}` }));
+          : route.wakeServiceId
+            ? [{ dial: `127.0.0.1:${getServiceWakePort()}` }]
+            : route.hostPorts.map((p) => ({ dial: `127.0.0.1:${p}` }));
 
       const reverseProxyHandler: Record<string, unknown> = {
         handler: "reverse_proxy",
         upstreams,
       };
+
+      if (route.type === "proxy" && route.wakeServiceId) {
+        reverseProxyHandler.headers = {
+          request: { set: { [SERVICE_WAKE_HEADER]: [route.wakeServiceId] } },
+        };
+      }
 
       if (upstreams.length > 1) {
         reverseProxyHandler.load_balancing = {
@@ -548,6 +562,8 @@ export async function computeDesiredCaddyConfig(): Promise<DesiredCaddyConfig> {
       "deployments.hostPort as deploymentHostPort",
       "replicas.hostPort as replicaHostPort",
       "services.requestTimeout",
+      "services.id as serviceId",
+      "services.sleepingSince",
     ])
     .where("domains.dnsVerified", "=", true)
     .execute();
@@ -585,6 +601,7 @@ export async function computeDesiredCaddyConfig(): Promise<DesiredCaddyConfig> {
           type: "proxy",
           hostPorts: [port],
           requestTimeout: d.requestTimeout ?? undefined,
+          wakeServiceId: d.sleepingSince !== null ? d.serviceId : undefined,
         });
       }
     } else if (d.type === "redirect" && d.redirectTarget) {

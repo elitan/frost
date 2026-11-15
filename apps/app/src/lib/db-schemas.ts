@@ -138,6 +138,7 @@ export const deploymentsSchema = z.object({
   trigger: z.string().nullable(),
   triggeredByUsername: z.string().nullable(),
   triggeredByAvatarUrl: z.string().nullable(),
+  scaleToZeroMinutes: z.number().nullable(),
 });
 
 export const newDeploymentsSchema = z.object({
@@ -166,6 +167,7 @@ export const newDeploymentsSchema = z.object({
   trigger: z.string().nullable().optional(),
   triggeredByUsername: z.string().nullable().optional(),
   triggeredByAvatarUrl: z.string().nullable().optional(),
+  scaleToZeroMinutes: z.number().nullable().optional(),
 });
 
 export const deploymentsUpdateSchema = z.object({
@@ -194,6 +196,7 @@ export const deploymentsUpdateSchema = z.object({
   trigger: z.string().nullable().optional(),
   triggeredByUsername: z.string().nullable().optional(),
   triggeredByAvatarUrl: z.string().nullable().optional(),
+  scaleToZeroMinutes: z.number().nullable().optional(),
 });
 
 export type Deployments = z.infer<typeof deploymentsSchema>;
@@ -594,6 +597,9 @@ export const servicesSchema = z.object({
   frostFilePath: z.string().nullable(),
   replicaCount: z.number(),
   createdAt: z.number(),
+  scaleToZeroMinutes: z.number().nullable(),
+  lastActivityAt: z.number().nullable(),
+  sleepingSince: z.number().nullable(),
 });
 
 export const newServicesSchema = z.object({
@@ -627,6 +633,9 @@ export const newServicesSchema = z.object({
   frostFilePath: z.string().nullable().optional(),
   replicaCount: z.number().optional(),
   createdAt: z.number(),
+  scaleToZeroMinutes: z.number().nullable().optional(),
+  lastActivityAt: z.number().nullable().optional(),
+  sleepingSince: z.number().nullable().optional(),
 });
 
 export const servicesUpdateSchema = z.object({
@@ -660,6 +669,9 @@ export const servicesUpdateSchema = z.object({
   frostFilePath: z.string().nullable().optional(),
   replicaCount: z.number().optional(),
   createdAt: z.number().optional(),
+  scaleToZeroMinutes: z.number().nullable().optional(),
+  lastActivityAt: z.number().nullable().optional(),
+  sleepingSince: z.number().nullable().optional(),
 });
 
 export type Services = z.infer<typeof servicesSchema>;

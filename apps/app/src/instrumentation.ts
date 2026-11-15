@@ -93,6 +93,22 @@ export async function register() {
     startDatabaseTargetPolicyScheduler();
     console.log("[startup] database target policy scheduler: started");
 
+    const { startServiceWakeServer } = await import(
+      "./lib/service-wake-server"
+    );
+    try {
+      const wakePort = await startServiceWakeServer();
+      console.log(`[startup] service wake server: listening on ${wakePort}`);
+    } catch (err) {
+      console.error("[startup] service wake server: failed to start", err);
+    }
+
+    const { startScaleToZeroScheduler } = await import(
+      "./lib/service-scale-to-zero"
+    );
+    startScaleToZeroScheduler();
+    console.log("[startup] scale-to-zero scheduler: started");
+
     const { startCaddyReconcileScheduler } = await import(
       "./lib/caddy-reconcile"
     );

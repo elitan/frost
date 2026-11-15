@@ -10,6 +10,11 @@ import {
 import { syncCaddyConfig } from "@/lib/domains";
 import { cleanupService } from "@/lib/lifecycle";
 import {
+  ensureServiceAwake,
+  ServiceWakeError,
+  sleepService,
+} from "@/lib/service-scale-to-zero";
+import {
   isUserFacingServiceType,
   type ServiceType,
   USER_FACING_SERVICE_TYPES,
@@ -320,6 +325,8 @@ export const services = {
       updates.drainTimeout = input.drainTimeout;
     if (input.requestTimeout !== undefined)
       updates.requestTimeout = input.requestTimeout;
+    if (input.scaleToZeroMinutes !== undefined)
+      updates.scaleToZeroMinutes = input.scaleToZeroMinutes;
     if (input.volumes !== undefined)
       updates.volumes = JSON.stringify(input.volumes);
     if (input.registryId !== undefined) updates.registryId = input.registryId;
@@ -390,6 +397,53 @@ export const services = {
 
     const deploymentId = await deployService(input.serviceId);
     return { deploymentId };
+  }),
+
+  wake: os.services.wake.handler(async ({ input }) => {
+    const service = await db
+      .selectFrom("services")
+      .select(["id", "serviceType"])
+      .where("id", "=", input.serviceId)
+      .executeTakeFirst();
+
+    if (!service) {
+      throw new ORPCError("NOT_FOUND", { message: "Service not found" });
+    }
+    assertUserService(service);
+
+    try {
+      await ensureServiceAwake(input.serviceId);
+    } catch (error) {
+      if (error instanceof ServiceWakeError) {
+        throw new ORPCError("CONFLICT", { message: error.message });
+      }
+      throw error;
+    }
+    return { success: true };
+  }),
+
+  sleep: os.services.sleep.handler(async ({ input }) => {
+    const service = await db
+      .selectFrom("services")
+      .select(["id", "serviceType", "sleepingSince"])
+      .where("id", "=", input.serviceId)
+      .executeTakeFirst();
+
+    if (!service) {
+      throw new ORPCError("NOT_FOUND", { message: "Service not found" });
+    }
+    assertUserService(service);
+
+    if (service.sleepingSince !== null) {
+      return { success: true };
+    }
+    const slept = await sleepService(input.serviceId, { force: true });
+    if (!slept) {
+      throw new ORPCError("CONFLICT", {
+        message: "Service has no running deployment to put to sleep",
+      });
+    }
+    return { success: true };
   }),
 
   listDeployments: os.services.listDeployments.handler(async ({ input }) => {

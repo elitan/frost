@@ -106,4 +106,34 @@ describe("getServiceRuntimeState", () => {
       attentionStatus: null,
     });
   });
+
+  test("returns sleeping for a scaled-to-zero current deploy", () => {
+    expect(
+      getServiceRuntimeState({
+        currentDeploymentId: "d-1",
+        latestDeployment: latestDeployment("d-1", "running"),
+        sleeping: true,
+      }),
+    ).toEqual({ runtimeStatus: "sleeping", attentionStatus: null });
+  });
+
+  test("keeps the updating attention while sleeping", () => {
+    expect(
+      getServiceRuntimeState({
+        currentDeploymentId: "d-1",
+        latestDeployment: latestDeployment("d-2", "building"),
+        sleeping: true,
+      }),
+    ).toEqual({ runtimeStatus: "sleeping", attentionStatus: "updating" });
+  });
+
+  test("ignores the sleeping flag without a current deployment", () => {
+    expect(
+      getServiceRuntimeState({
+        currentDeploymentId: null,
+        latestDeployment: latestDeployment("d-1", "failed"),
+        sleeping: true,
+      }),
+    ).toEqual({ runtimeStatus: "offline", attentionStatus: null });
+  });
 });

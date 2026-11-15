@@ -737,6 +737,9 @@ function rebuildServicesForObjectStorage(sqlite: Database): void {
       frost_file_path TEXT DEFAULT 'frost.yaml',
       replica_count INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
+      scale_to_zero_minutes INTEGER,
+      last_activity_at INTEGER,
+      sleeping_since INTEGER,
       UNIQUE(environment_id, name)
     );
 
@@ -770,7 +773,10 @@ function rebuildServicesForObjectStorage(sqlite: Database): void {
       current_deployment_id,
       frost_file_path,
       replica_count,
-      created_at
+      created_at,
+      scale_to_zero_minutes,
+      last_activity_at,
+      sleeping_since
     )
     SELECT
       ${selectExistingColumn(columns, "id", "lower(hex(randomblob(10)))")},
@@ -802,7 +808,10 @@ function rebuildServicesForObjectStorage(sqlite: Database): void {
       ${selectExistingColumn(columns, "current_deployment_id", "NULL")},
       ${selectExistingColumn(columns, "frost_file_path", "'frost.yaml'")},
       ${selectExistingColumn(columns, "replica_count", "1")},
-      ${selectExistingColumn(columns, "created_at", "strftime('%s','now') * 1000")}
+      ${selectExistingColumn(columns, "created_at", "strftime('%s','now') * 1000")},
+      ${selectExistingColumn(columns, "scale_to_zero_minutes", "NULL")},
+      ${selectExistingColumn(columns, "last_activity_at", "NULL")},
+      ${selectExistingColumn(columns, "sleeping_since", "NULL")}
     FROM services;
 
     DROP TABLE services;

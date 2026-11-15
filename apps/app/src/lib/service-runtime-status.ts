@@ -13,6 +13,7 @@ export type ServiceRuntimeStatus =
   | "not-deployed"
   | "starting"
   | "online"
+  | "sleeping"
   | "offline";
 
 export type ServiceAttentionStatus = "updating" | "last-deploy-failed" | null;
@@ -25,6 +26,8 @@ interface DeploymentLike {
 interface ServiceRuntimeInput {
   currentDeploymentId: string | null;
   latestDeployment: DeploymentLike | null;
+  /** The current deployment is scaled to zero and wakes on traffic. */
+  sleeping?: boolean;
 }
 
 interface ServiceRuntimeState {
@@ -88,15 +91,17 @@ export function getServiceRuntimeState(
     input.currentDeploymentId !== null || latestDeployment.status === "running";
 
   if (hasCurrentDeployment) {
+    let state = ONLINE_STATE;
     if (!latestIsCurrent && isInProgressStatus(latestDeployment.status)) {
-      return ONLINE_UPDATING_STATE;
+      state = ONLINE_UPDATING_STATE;
+    } else if (!latestIsCurrent && latestDeployment.status === "failed") {
+      state = ONLINE_FAILED_STATE;
     }
 
-    if (!latestIsCurrent && latestDeployment.status === "failed") {
-      return ONLINE_FAILED_STATE;
+    if (input.sleeping && input.currentDeploymentId !== null) {
+      return { ...state, runtimeStatus: "sleeping" };
     }
-
-    return ONLINE_STATE;
+    return state;
   }
 
   if (isInProgressStatus(latestDeployment.status)) {

@@ -18,7 +18,11 @@ import { StatusNotice } from "@/components/status-notice";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDomains } from "@/hooks/use-domains";
-import { useDeployments, useDeployService } from "@/hooks/use-services";
+import {
+  useDeployments,
+  useDeployService,
+  useWakeService,
+} from "@/hooks/use-services";
 import type { Deployment, EnvVar, Service } from "@/lib/api";
 import { api } from "@/lib/api";
 import { buildConnectionString } from "@/lib/connection-strings";
@@ -105,6 +109,7 @@ interface SidebarOverviewProps {
 
 export function SidebarOverview({ service }: SidebarOverviewProps) {
   const deployMutation = useDeployService(service.id, service.environmentId);
+  const wakeMutation = useWakeService(service.id, service.environmentId);
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],
@@ -163,6 +168,18 @@ export function SidebarOverview({ service }: SidebarOverviewProps) {
   // they can never contradict each other.
   const isStarting = service.runtimeStatus === "starting";
   const isOffline = service.runtimeStatus === "offline";
+  const isSleeping = service.runtimeStatus === "sleeping";
+
+  async function handleWake() {
+    try {
+      await wakeMutation.mutateAsync();
+      toast.success("Service is awake");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to wake service",
+      );
+    }
+  }
 
   return (
     <div className="space-y-4 ">
@@ -205,6 +222,27 @@ export function SidebarOverview({ service }: SidebarOverviewProps) {
                 ? "Latest deployment is still starting."
                 : latestDeployment.errorMessage ||
                   "No deployment is serving traffic right now."}
+            </StatusNotice>
+          ) : null}
+
+          {isSleeping ? (
+            <StatusNotice tone="neutral" heading="Sleeping" className="mb-3">
+              <p>
+                Scaled to zero after a period without traffic. The next request
+                to one of its domains wakes it.
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="mt-2"
+                onClick={handleWake}
+                disabled={wakeMutation.isPending}
+              >
+                {wakeMutation.isPending ? (
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                ) : null}
+                Wake now
+              </Button>
             </StatusNotice>
           ) : null}
 

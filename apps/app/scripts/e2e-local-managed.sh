@@ -6,6 +6,10 @@ APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 PORT="${FROST_PORT:-3301}"
+# Separate from a dev server's default wake port so both can run at once.
+WAKE_PORT="${FROST_WAKE_PORT:-3391}"
+# Faster scale-to-zero checks so the idle-sleep e2e finishes quickly.
+SCALE_TO_ZERO_INTERVAL_MS="${FROST_SCALE_TO_ZERO_INTERVAL_MS:-5000}"
 BATCH_SIZE="${1:-${E2E_BATCH_SIZE:-2}}"
 DEV_LOG="${E2E_DEV_LOG:-/tmp/frost-dev.log}"
 JWT_SECRET="${FROST_JWT_SECRET:-frost-e2e-$(openssl rand -hex 24)}"
@@ -114,6 +118,8 @@ echo "Starting local Frost dev server..."
     FROST_DATA_DIR="$DATA_DIR" \
     FROST_JWT_SECRET="$JWT_SECRET" \
     FROST_SETUP_TOKEN="$SETUP_TOKEN" \
+    FROST_WAKE_PORT="$WAKE_PORT" \
+    FROST_SCALE_TO_ZERO_INTERVAL_MS="$SCALE_TO_ZERO_INTERVAL_MS" \
     bun --bun next dev -p "$PORT"
 ) > "$DEV_LOG" 2>&1 &
 DEV_PID=$!
@@ -184,6 +190,7 @@ echo "✓ API key created and verified"
 echo ""
 echo "Running E2E tests..."
 FROST_PORT="$PORT" \
+FROST_WAKE_PORT="$WAKE_PORT" \
 FROST_DATA_DIR="$DATA_DIR" \
 ADMIN_PASSWORD="e2eTestPassword123" \
 FROST_SETUP_TOKEN="$SETUP_TOKEN" \

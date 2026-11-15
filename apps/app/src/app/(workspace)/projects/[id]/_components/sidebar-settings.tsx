@@ -25,6 +25,7 @@ import { ImageConfigCard } from "../services/[serviceId]/settings/_components/im
 import { MemoryLimitCard } from "../services/[serviceId]/settings/_components/memory-limit-card";
 import { ReplicaCountCard } from "../services/[serviceId]/settings/_components/replica-count-card";
 import { RequestTimeoutCard } from "../services/[serviceId]/settings/_components/request-timeout-card";
+import { ScaleToZeroCard } from "../services/[serviceId]/settings/_components/scale-to-zero-card";
 import { ServiceNameCard } from "../services/[serviceId]/settings/_components/service-name-card";
 import { ShutdownTimeoutCard } from "../services/[serviceId]/settings/_components/shutdown-timeout-card";
 import { VolumesCard } from "../services/[serviceId]/settings/_components/volumes-card";
@@ -376,6 +377,7 @@ export function SidebarSettings({ service, projectId }: SidebarSettingsProps) {
           <>
             <ContainerPortCard serviceId={service.id} />
             <ReplicaCountCard serviceId={service.id} />
+            <ScaleToZeroCard serviceId={service.id} />
             <HealthCheckCard serviceId={service.id} />
             <RequestTimeoutCard serviceId={service.id} />
             <DrainTimeoutCard serviceId={service.id} />

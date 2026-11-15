@@ -16,6 +16,7 @@ import {
   removeImage,
   removeNetwork,
 } from "./docker";
+import { listSleepingContainerIds } from "./service-scale-to-zero";
 import { compactSqliteDatabase } from "./sqlite-maintenance";
 
 const CLEANUP_LOCK_TIMEOUT_MS = 6 * 60 * 60 * 1000;
@@ -255,6 +256,19 @@ export async function updateCleanupSettings(
   await Promise.all(updates);
 }
 
+async function listSleepingImageNames(): Promise<string[]> {
+  const rows = await db
+    .selectFrom("services")
+    .innerJoin("deployments", "deployments.id", "services.currentDeploymentId")
+    .select("deployments.imageName")
+    .where("services.sleepingSince", "is not", null)
+    .where("deployments.imageName", "is not", null)
+    .execute();
+  return rows.flatMap(function mapImage(row) {
+    return row.imageName ? [row.imageName] : [];
+  });
+}
+
 export async function runCleanup(
   options: CleanupOptions,
 ): Promise<CleanupResult> {
@@ -274,6 +288,10 @@ export async function runCleanup(
 
   try {
     const runningImages = await getRunningImageNames();
+    // Sleeping (scale-to-zero) services are stopped but must start again.
+    for (const image of await listSleepingImageNames()) {
+      runningImages.add(image);
+    }
     const allImages = await listFrostImages();
 
     const imagesByService = new Map<
@@ -325,7 +343,9 @@ export async function runCleanup(
     result.prunedBuildCacheBytes = buildCacheResult.bytes;
     result.freedBytes += buildCacheResult.bytes;
 
-    result.prunedContainers = await pruneStoppedContainers();
+    result.prunedContainers = await pruneStoppedContainers(
+      await listSleepingContainerIds(),
+    );
 
     if (options.pruneNetworks) {
       const networks = await listFrostNetworks();

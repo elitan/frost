@@ -23,6 +23,11 @@ health_check:
 resources:
   memory: 512m
   cpu: 0.5
+deploy:
+  replicas: 2
+  drain_timeout: 30
+  shutdown_timeout: 30
+  scale_to_zero_minutes: 15
 ```
 
 ## Fields
@@ -35,6 +40,10 @@ resources:
 | `health_check.timeout` | Startup timeout in seconds |
 | `resources.memory` | Memory limit (e.g., `256m`, `1g`) |
 | `resources.cpu` | CPU limit (e.g., `0.5`, `2`) |
+| `deploy.replicas` | Number of container instances (1-10) |
+| `deploy.drain_timeout` | Seconds old containers keep serving after a deploy (0-300) |
+| `deploy.shutdown_timeout` | Seconds between SIGTERM and SIGKILL (1-300) |
+| `deploy.scale_to_zero_minutes` | Minutes without traffic before the service sleeps (1-10080), or `false`. See [Scale to Zero](/docs/guides/scale-to-zero) |
 
 ## Override Behavior
 

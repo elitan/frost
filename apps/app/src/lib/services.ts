@@ -30,6 +30,7 @@ export interface CreateServiceInput {
   shutdownTimeout?: number | null;
   drainTimeout?: number | null;
   requestTimeout?: number | null;
+  scaleToZeroMinutes?: number | null;
   volumes?: { name: string; path: string }[];
   command?: string | null;
   icon?: string | null;
@@ -73,6 +74,7 @@ export async function createService(
       shutdownTimeout: input.shutdownTimeout ?? null,
       drainTimeout: input.drainTimeout ?? null,
       requestTimeout: input.requestTimeout ?? null,
+      scaleToZeroMinutes: input.scaleToZeroMinutes ?? null,
       volumes: JSON.stringify(input.volumes ?? []),
       command: input.command ?? null,
       icon: input.icon ?? null,
