@@ -6,6 +6,7 @@ import {
   GitBranch,
   Globe,
   Lock,
+  Moon,
   RotateCcw,
   Settings,
   Zap,
@@ -47,6 +48,11 @@ const features = [
     icon: Settings,
     title: "Resource Limits",
     description: "Set memory and CPU limits. Keep services in check.",
+  },
+  {
+    icon: Moon,
+    title: "Scale to Zero",
+    description: "Idle services sleep. The next request wakes them up.",
   },
 ];
 

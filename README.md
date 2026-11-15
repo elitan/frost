@@ -21,6 +21,7 @@ Demo: [demo.frost.build](https://demo.frost.build)
 - Custom domains and redirects
 - PR preview environments
 - Zero-downtime deploys and instant rollbacks
+- Scale to zero: idle services sleep and wake on the next request
 - Health checks, resource limits, persistent volumes
 - Managed object storage with S3-compatible buckets and access keys
 - REST API
