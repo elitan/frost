@@ -737,7 +737,7 @@ function rebuildServicesForObjectStorage(sqlite: Database): void {
       frost_file_path TEXT DEFAULT 'frost.yaml',
       replica_count INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
-      scale_to_zero_minutes INTEGER,
+      scale_to_zero_minutes INTEGER DEFAULT 15,
       last_activity_at INTEGER,
       sleeping_since INTEGER,
       UNIQUE(environment_id, name)
@@ -809,7 +809,7 @@ function rebuildServicesForObjectStorage(sqlite: Database): void {
       ${selectExistingColumn(columns, "frost_file_path", "'frost.yaml'")},
       ${selectExistingColumn(columns, "replica_count", "1")},
       ${selectExistingColumn(columns, "created_at", "strftime('%s','now') * 1000")},
-      ${selectExistingColumn(columns, "scale_to_zero_minutes", "NULL")},
+      ${selectExistingColumn(columns, "scale_to_zero_minutes", "15")},
       ${selectExistingColumn(columns, "last_activity_at", "NULL")},
       ${selectExistingColumn(columns, "sleeping_since", "NULL")}
     FROM services;

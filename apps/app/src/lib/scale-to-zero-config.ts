@@ -3,6 +3,8 @@
 
 export const SCALE_TO_ZERO_MIN_MINUTES = 1;
 export const SCALE_TO_ZERO_MAX_MINUTES = 7 * 24 * 60;
+/** New app services scale to zero after this many idle minutes. */
+export const DEFAULT_SCALE_TO_ZERO_MINUTES = 15;
 
 /** Header Caddy sets on requests for a sleeping service's domains. */
 export const SERVICE_WAKE_HEADER = "x-frost-wake-service";

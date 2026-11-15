@@ -324,7 +324,7 @@ export interface Services {
   frostFilePath: Generated<string | null>;
   replicaCount: Generated<number>;
   createdAt: number;
-  scaleToZeroMinutes: number | null;
+  scaleToZeroMinutes: Generated<number | null>;
   lastActivityAt: number | null;
   sleepingSince: number | null;
 }

@@ -3,6 +3,7 @@ import { db } from "./db";
 import type { Services } from "./db-types";
 import { createWildcardDomain } from "./domains";
 import { newServiceId } from "./id";
+import { DEFAULT_SCALE_TO_ZERO_MINUTES } from "./scale-to-zero-config";
 import type { ServiceType } from "./service-visibility";
 import { generateSelfSignedCert } from "./ssl";
 
@@ -74,7 +75,13 @@ export async function createService(
       shutdownTimeout: input.shutdownTimeout ?? null,
       drainTimeout: input.drainTimeout ?? null,
       requestTimeout: input.requestTimeout ?? null,
-      scaleToZeroMinutes: input.scaleToZeroMinutes ?? null,
+      // On by default for apps; an explicit null means always on.
+      scaleToZeroMinutes:
+        input.scaleToZeroMinutes !== undefined
+          ? input.scaleToZeroMinutes
+          : (input.serviceType ?? "app") === "app"
+            ? DEFAULT_SCALE_TO_ZERO_MINUTES
+            : null,
       volumes: JSON.stringify(input.volumes ?? []),
       command: input.command ?? null,
       icon: input.icon ?? null,

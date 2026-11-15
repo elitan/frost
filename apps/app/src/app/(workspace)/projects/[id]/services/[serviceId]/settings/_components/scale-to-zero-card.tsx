@@ -81,7 +81,7 @@ export function ScaleToZeroCard({ serviceId }: ScaleToZeroCardProps) {
   return (
     <SettingCard
       title="Scale to Zero"
-      description="Stop the service's containers after a period with no network traffic. The next request to one of its domains starts it again, so that request waits for the cold start. Requests from other services or straight to its port do not wake it."
+      description="Stop the service's containers after a period with no network traffic (on by default, after 15 minutes). The next request to one of its domains starts it again, so that request waits for the cold start. Requests from other services or straight to its port do not wake it: choose Always on for internal-only services and background workers."
       onSubmit={handleSave}
       footerRight={
         <Button

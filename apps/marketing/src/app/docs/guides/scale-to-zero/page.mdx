@@ -2,6 +2,8 @@
 
 Stop a service when nobody is using it, and start it again on the next request.
 
+Scale to zero is **on by default**: app services sleep after 15 minutes without traffic. Set **Always on** for services that must not sleep (see [Limitations](#limitations)).
+
 ## How it works
 
 1. Frost watches each service's network traffic.
@@ -15,7 +17,7 @@ A sleeping service shows as **sleeping** in the dashboard. Click **Wake now** to
 
 ## Limitations
 
-- Only requests to the service's **domains** wake it. Requests from other services over the project network, or straight to its host port, do not.
+- Only requests to the service's **domains** wake it. Requests from other services over the project network, or straight to its host port, do not. Set internal-only services (e.g. an API only other services call) and background workers to **Always on**.
 - Any network traffic counts as activity, including outbound calls the app makes itself. A service that polls something every few minutes will never sleep.
 - Long-lived connections (WebSockets) are closed when the service sleeps. A connection that stays open through the wake proxy keeps it awake.
 - Volumes are kept while a service sleeps.
@@ -39,15 +41,15 @@ Set it to `false` to keep the service always on, even when the UI setting is on.
 
 | Field | Description |
 |-------|-------------|
-| `deploy.scale_to_zero_minutes` | Minutes without traffic before the service sleeps (1-10080), or `false` to disable |
+| `deploy.scale_to_zero_minutes` | Minutes without traffic before the service sleeps (1-10080, default 15), or `false` to disable |
 
 ### API
 
 ```bash
-# enable (redeploy to apply)
+# change the idle time, or pass null for always on (redeploy to apply)
 curl -X PATCH https://frost.example.com/api/services/<id> \
   -H "X-Frost-Token: <api-key>" -H "Content-Type: application/json" \
-  -d '{"scaleToZeroMinutes": 15}'
+  -d '{"scaleToZeroMinutes": 60}'
 
 # sleep or wake right now
 curl -X POST https://frost.example.com/api/services/<id>/sleep -H "X-Frost-Token: <api-key>"

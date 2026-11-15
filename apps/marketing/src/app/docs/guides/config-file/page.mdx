@@ -43,7 +43,7 @@ deploy:
 | `deploy.replicas` | Number of container instances (1-10) |
 | `deploy.drain_timeout` | Seconds old containers keep serving after a deploy (0-300) |
 | `deploy.shutdown_timeout` | Seconds between SIGTERM and SIGKILL (1-300) |
-| `deploy.scale_to_zero_minutes` | Minutes without traffic before the service sleeps (1-10080), or `false`. See [Scale to Zero](/docs/guides/scale-to-zero) |
+| `deploy.scale_to_zero_minutes` | Minutes without traffic before the service sleeps (1-10080, default 15), or `false` to keep it always on. See [Scale to Zero](/docs/guides/scale-to-zero) |
 
 ## Override Behavior
 
