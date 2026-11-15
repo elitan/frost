@@ -367,15 +367,8 @@ export function DatabaseBranchPanel({
       nextScaleToZeroMinutes <= 24 * 60);
   const scaleToZeroChanged =
     hasRuntime && nextScaleToZeroMinutes !== runtime.scaleToZeroMinutes;
-  let scaleToZeroBlockedReason: string | null = null;
-  if (isMainBranch) {
-    scaleToZeroBlockedReason = "main cannot use scale to zero.";
-  }
   const canSaveScaleToZero =
-    hasRuntime &&
-    isValidScaleToZeroMinutes &&
-    scaleToZeroChanged &&
-    (nextScaleToZeroMinutes === null || scaleToZeroBlockedReason === null);
+    hasRuntime && isValidScaleToZeroMinutes && scaleToZeroChanged;
   const filteredCpuOptions = CPU_OPTIONS.filter(
     (opt) => !opt.minCpus || (hostResources?.cpus ?? 0) >= opt.minCpus,
   );
@@ -1290,11 +1283,6 @@ export function DatabaseBranchPanel({
                               minutes
                             </span>
                           </div>
-                          {scaleToZeroBlockedReason && (
-                            <div className="mt-2 text-xs text-neutral-500">
-                              {scaleToZeroBlockedReason}
-                            </div>
-                          )}
                           {!isValidScaleToZeroMinutes && (
                             <div className="mt-2 text-xs text-neutral-500">
                               Use a whole number between 1 and 1440.

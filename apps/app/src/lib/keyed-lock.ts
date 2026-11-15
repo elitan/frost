@@ -7,7 +7,14 @@
  * calling withLock for a key from inside a task holding that key deadlocks,
  * so lock-holding code must call unlocked internals instead.
  */
-const tails = new Map<string, Promise<void>>();
+// On globalThis: Next.js loads instrumentation (schedulers, wake servers) and
+// route handlers as separate module instances in one process; a module-level
+// map would give each its own locks.
+const globalForLocks = globalThis as typeof globalThis & {
+  frostKeyedLockTails?: Map<string, Promise<void>>;
+};
+globalForLocks.frostKeyedLockTails ??= new Map<string, Promise<void>>();
+const tails = globalForLocks.frostKeyedLockTails;
 
 export async function withLock<T>(
   key: string,

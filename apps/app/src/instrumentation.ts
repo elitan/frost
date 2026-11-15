@@ -109,9 +109,13 @@ export async function register() {
     const { startActivatorControlServer } = await import(
       "./lib/service-activator"
     );
+    const { wakeDatabaseTargetForProxy } = await import(
+      "./lib/database-runtime"
+    );
     try {
       const activatorPort = await startActivatorControlServer({
         ensureServiceAwake,
+        wakeDatabaseTarget: wakeDatabaseTargetForProxy,
       });
       console.log(`[startup] activator control: listening on ${activatorPort}`);
     } catch (err) {

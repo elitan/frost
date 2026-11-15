@@ -1,7 +1,12 @@
 # frost-activator (experiment)
 
-A tiny stand-in that lets a sleeping (scale-to-zero) service wake on traffic
-from **other services**, not just on requests to its domains.
+Wakes sleeping (scale-to-zero) workloads on connection. Two modes:
+
+- **standby** (below): a temporary stand-in for a sleeping app service, so it
+  wakes on traffic from **other services**, not just on requests to its
+  domains.
+- **resident** (see [Postgres](#resident-mode-postgres)): a permanent proxy in
+  front of a scale-to-zero Postgres branch.
 
 Containers reach each other as `<hostname>.frost.internal` on their Docker
 network. That traffic never passes through Caddy, and when a service's
@@ -79,3 +84,80 @@ apps/activator/build.sh x86_64     # needs: rustup target add x86_64-unknown-lin
 - **One activator leftover case.** If a service wakes another way (domain, API)
   its idle stand-in stays until its first connection, then exits. Harmless,
   but it holds ~0.5 MB until then.
+
+## Resident mode (Postgres)
+
+Managed Postgres branches (including `main`) with scale to zero get a
+resident proxy, `frost-dbproxy-<targetId>`, that owns the branch's internal
+hostnames on every environment network for good. The database container
+carries no aliases; the proxy forwards to it by container name (resolved on
+every connection, so a recreated container with a new IP is followed and a
+stale IP can never reach another branch). Traffic is never inspected, so TLS
+(`sslmode=require`) passes through end to end.
+
+Why not read the transaction state from the protocol: Frost's Postgres uses
+TLS, so the bytes are opaque. Instead:
+
+- **Idle detection** combines Postgres's own view (`pg_stat_activity`: any
+  query running or transaction open = busy; idle pooled connections are idle)
+  with the proxy's last-byte time (catches short-lived connections that leave
+  no session behind) and the public-port gateway's activity.
+- **Sleeping** goes through control commands on a loopback port, sent with
+  `docker exec <proxy> /frost-activator ctl <cmd>`:
+  1. `pause`: new connections are held; client bytes on forwarded
+     connections are held back, and any arriving marks the pause "touched".
+  2. Frost waits 500 ms and checks `pg_stat_activity` again.
+  3. `commit`: atomic. Refuses ("busy") if touched; otherwise closes every
+     forwarded connection. Frost then `resume`s (sleep called off) or stops
+     Postgres (fast shutdown) and sends `sleep`.
+  Held and new connections then ask Frost to wake the database.
+- A pause expires after 60 s, so a Frost crash mid-sleep can't wedge it.
+- If the forward target stops answering (manual stop, crash, redeploy), the
+  proxy asks Frost again, which starts the database if needed.
+
+Frost's database policy tick also reconciles proxies (restarts missing ones,
+removes stale ones). If a proxy can't start, the database keeps its hostnames
+and doesn't sleep.
+
+### Results (Docker Desktop, arm64, `postgres:17-alpine` with TLS)
+
+| Check | Result |
+|---|---|
+| TLS through the proxy | TLSv1.3 end to end |
+| Cold connection while asleep | 0.45 s standalone; 1.9 s via Frost (it recreates the container) |
+| Overhead, 1 client (pgbench -S) | 0.05 ms → 0.09 ms per round trip |
+| Overhead, 16 clients | 70–105k tps vs 99–116k direct (trivial queries) |
+| 1M-row COPY down and up | checksums match |
+| 200 concurrent connections in a cold start | 200/200 |
+| Pools across sleeps: node-postgres, postgres.js, pgx | 0 failures, also when querying right after a sleep |
+| SQLAlchemy without / with `pool_pre_ping` | first query after each sleep fails / 0 failures |
+| Open transaction, running query, recent query | sleep refused, client undisturbed |
+| Connection arriving during the pause | held, then woken or resumed |
+| Race: 54 forced sleeps under heavy traffic, before `commit` existed | 5 failed queries (query sent between check and shutdown) |
+| Same with `commit` (heavy + light traffic, ~11k queries, 50 sleeps) | 0 failures; most sleeps under heavy traffic are correctly refused |
+| Proxy restart, DB recreated with new IP, DB stopped behind its back, Frost down, pause never followed up | all recover |
+| Memory | ~1 MB idle, 13 MB with 150 open TLS connections (~88 KB each) |
+
+Tests: `src/lib/database-target-proxy.integration.test.ts` (real Docker,
+through Frost's runtime functions) and `scripts/e2e/group-34-database-scale-to-zero.sh`
+(HTTP API + scheduler). Both skip when the image is missing.
+
+### Open issues
+
+- A chunk the proxy has read but not yet passed through the gate when
+  `commit` takes the lock is dropped (the client sees a closed connection);
+  the window is the few instructions between `read` returning and the gate
+  check. Closing it fully needs a protocol-aware pooler
+  (proxy terminates sessions), which TLS rules out without terminating TLS.
+- Queries through the public port (gateway) aren't held back during the
+  pause; a long one is still seen by `pg_stat_activity`.
+- Short-lived connections only count through the proxy (internal) or the
+  gateway (public port); something connecting to the container directly
+  wouldn't (nothing does today).
+- `LISTEN` sessions are idle by `pg_stat_activity`, so a database whose only
+  client is a listener sleeps under it.
+- After the database closes a connection, the proxy waits for the client to
+  close its side too (half-close), keeping two threads per such connection
+  until then. Postgres clients close promptly; same as standby mode.
+- With scale to zero on, a manually stopped branch wakes on the next
+  connection (as with the public-port gateway).

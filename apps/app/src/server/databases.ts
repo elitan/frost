@@ -139,11 +139,13 @@ async function assertBranchPolicyPatchAllowed(input: {
     });
   }
 
-  const enablesTtl = input.ttlValue !== null || input.ttlUnit !== null;
-  const enablesScaleToZero = input.scaleToZeroMinutes !== null;
-  if (target.name === "main" && (enablesTtl || enablesScaleToZero)) {
+  // TTL deletes the branch, so main can't have one. Main can scale to zero.
+  const enablesTtl =
+    (hasTtlValue && input.ttlValue !== null) ||
+    (hasTtlUnit && input.ttlUnit !== null);
+  if (target.name === "main" && enablesTtl) {
     throw new ORPCError("BAD_REQUEST", {
-      message: "main cannot use TTL or scale to zero",
+      message: "main cannot use TTL",
     });
   }
 }

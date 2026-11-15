@@ -17,6 +17,14 @@ import {
   startDatabaseTargetGateway,
   stopDatabaseTargetGateway,
 } from "./database-target-gateway";
+import {
+  controlDatabaseProxy,
+  ensureDatabaseProxy,
+  listDatabaseProxyTargetIds,
+  readContainerNetworkAliases,
+  removeDatabaseProxy,
+  sameAliases,
+} from "./database-target-proxy";
 import type { DatabaseTargetStoppedReason } from "./database-target-status";
 import { db } from "./db";
 import type {
@@ -31,10 +39,12 @@ import {
   disconnectContainerFromNetwork,
   type FileMount,
   getAvailablePort,
+  getContainerStatus,
   isPortConflictError,
   type PortBinding,
   runContainer,
   stopContainer,
+  stopContainerKeepingIt,
   waitForHealthy,
 } from "./docker";
 import {
@@ -162,8 +172,21 @@ const MEMORY_LIMIT_PATTERN = /^\d+[kmg]$/i;
 const POSTGRES_QUERY_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const TARGET_ACTIVITY_WRITE_THROTTLE_MS = 5000;
 
-const targetActivityWriteAt = new Map<string, number>();
-const targetWakePromises = new Map<string, Promise<number>>();
+// Shared across module instances (instrumentation vs route handlers), like
+// the locks in keyed-lock.ts.
+const globalForRuntime = globalThis as typeof globalThis & {
+  frostTargetActivityWriteAt?: Map<string, number>;
+  frostTargetWakePromises?: Map<string, Promise<number>>;
+  frostProxyWakePromises?: Map<string, Promise<string[]>>;
+};
+globalForRuntime.frostTargetActivityWriteAt ??= new Map();
+globalForRuntime.frostTargetWakePromises ??= new Map();
+globalForRuntime.frostProxyWakePromises ??= new Map();
+const targetActivityWriteAt = globalForRuntime.frostTargetActivityWriteAt;
+const targetWakePromises = globalForRuntime.frostTargetWakePromises;
+const proxyWakePromises = globalForRuntime.frostProxyWakePromises;
+/** Time for connections opened just before a pause to show up in Postgres. */
+const PROXY_PAUSE_SETTLE_MS = 500;
 
 function randomSecret(bytes = 24): string {
   return randomBytes(bytes).toString("base64url");
@@ -1021,67 +1044,140 @@ function getTargetAliases(input: {
   return aliases;
 }
 
-async function ensurePostgresDatabaseNetworkAttachment(input: {
-  environment: Selectable<Environments>;
-  database: Selectable<Databases>;
-}): Promise<void> {
-  const targets = await db
-    .selectFrom("databaseTargets")
-    .selectAll()
-    .where("databaseId", "=", input.database.id)
-    .execute();
-
-  if (targets.length === 0) {
-    return;
-  }
-
-  const mainTargetId =
-    targets.find((target) => target.name === "main")?.id ?? targets[0]?.id;
-
-  const networkName = buildNetworkName(input.environment);
-  await createNetwork(networkName, {
-    "frost.managed": "true",
-    "frost.project.id": input.environment.projectId,
-  });
-
-  for (const target of targets) {
-    const providerRef = parseProviderRef(target.providerRefJson);
-    await disconnectContainerFromNetwork(
-      providerRef.containerName,
-      networkName,
-    );
-  }
-
-  for (const target of targets) {
-    const providerRef = parseProviderRef(target.providerRefJson);
-    await connectContainerToNetwork(
-      providerRef.containerName,
-      networkName,
-      getTargetAliases({
-        databaseName: input.database.name,
-        targetHostname: target.hostname,
-        includeBaseAliases: target.id === mainTargetId,
-      }),
-    );
-  }
+/**
+ * A scale-to-zero Postgres target sits behind a resident proxy that owns its
+ * internal hostnames (see database-target-proxy.ts).
+ */
+export function usesDatabaseProxy(
+  database: Pick<Databases, "engine">,
+  target: Pick<DatabaseTargets, "scaleToZeroMinutes">,
+): boolean {
+  return database.engine === "postgres" && target.scaleToZeroMinutes !== null;
 }
 
-async function reconnectPostgresDatabaseNetwork(
+/**
+ * Attaches a container to a network with exactly these aliases. Leaves a
+ * matching attachment alone (its connections survive); skips containers that
+ * don't exist (stopped targets are removed).
+ */
+async function attachContainerToNetwork(
+  containerName: string,
+  networkName: string,
+  aliases: string[],
+): Promise<void> {
+  const networks = await readContainerNetworkAliases(containerName);
+  if (!networks) {
+    return;
+  }
+  const current = networks.aliases.get(networkName);
+  if (current && sameAliases(current, aliases)) {
+    return;
+  }
+  if (current) {
+    await disconnectContainerFromNetwork(containerName, networkName);
+  }
+  await connectContainerToNetwork(containerName, networkName, aliases);
+}
+
+/**
+ * Makes a Postgres database's containers reachable on every environment
+ * network of its project. Targets without scale-to-zero own their hostnames;
+ * scale-to-zero targets hand them to their proxy (falling back to owning them
+ * if the proxy can't start), and the database container is reached by name.
+ */
+async function syncPostgresDatabaseNetworks(
   database: Selectable<Databases>,
 ): Promise<void> {
   if (database.engine !== "postgres") {
     return;
   }
+  await withLock(`db-network:${database.id}`, async function syncLocked() {
+    const targets = await db
+      .selectFrom("databaseTargets")
+      .selectAll()
+      .where("databaseId", "=", database.id)
+      .execute();
+    const environments = await db
+      .selectFrom("environments")
+      .selectAll()
+      .where("projectId", "=", database.projectId)
+      .execute();
 
-  const environments = await db
-    .selectFrom("environments")
-    .selectAll()
-    .where("projectId", "=", database.projectId)
-    .execute();
+    const networks: string[] = [];
+    for (const environment of environments) {
+      const networkName = buildNetworkName(environment);
+      await createNetwork(networkName, {
+        "frost.managed": "true",
+        "frost.project.id": environment.projectId,
+      });
+      networks.push(networkName);
+    }
 
-  for (const environment of environments) {
-    await ensurePostgresDatabaseNetworkAttachment({ environment, database });
-  }
+    const mainTargetId =
+      targets.find((target) => target.name === "main")?.id ?? targets[0]?.id;
+    const proxiedIds = new Set<string>();
+
+    for (const target of targets) {
+      const providerRef = parseProviderRef(target.providerRefJson);
+      const aliases = getTargetAliases({
+        databaseName: database.name,
+        targetHostname: target.hostname,
+        includeBaseAliases: target.id === mainTargetId,
+      });
+      let proxied = false;
+      if (usesDatabaseProxy(database, target) && networks.length > 0) {
+        try {
+          await ensureDatabaseProxy({
+            targetId: target.id,
+            databaseId: database.id,
+            port: providerRef.port,
+            networks: networks.map((network) => ({ network, aliases })),
+          });
+          proxied = true;
+          proxiedIds.add(target.id);
+        } catch (error) {
+          console.error(
+            "[database-runtime] Proxy failed to start; target keeps its hostnames",
+            { targetId: target.id, error },
+          );
+        }
+      }
+      for (const network of networks) {
+        // Best effort per target: a sibling may be stopping right now, and
+        // one target's attachment must not fail another target's start.
+        await attachContainerToNetwork(
+          providerRef.containerName,
+          network,
+          proxied ? [] : aliases,
+        ).catch(function onAttachError(error) {
+          console.error("[database-runtime] Network attach failed", {
+            targetId: target.id,
+            network,
+            error,
+          });
+        });
+      }
+    }
+
+    try {
+      for (const targetId of await listDatabaseProxyTargetIds(database.id)) {
+        if (!proxiedIds.has(targetId)) {
+          await removeDatabaseProxy(targetId);
+        }
+      }
+    } catch (error) {
+      console.error("[database-runtime] Stale proxy cleanup failed", {
+        databaseId: database.id,
+        error,
+      });
+    }
+  });
+}
+
+async function reconnectPostgresDatabaseNetwork(
+  database: Selectable<Databases>,
+): Promise<void> {
+  await syncPostgresDatabaseNetworks(database);
 }
 
 export async function ensureEnvironmentPostgresNetworkAccess(
@@ -1105,10 +1201,59 @@ export async function ensureEnvironmentPostgresNetworkAccess(
     .execute();
 
   for (const database of databases) {
-    await ensurePostgresDatabaseNetworkAttachment({
-      environment,
-      database: normalizeDatabase(database),
-    });
+    await syncPostgresDatabaseNetworks(normalizeDatabase(database));
+  }
+}
+
+/**
+ * Starts missing proxies (e.g. after a host reboot), fixes their networks and
+ * removes proxies whose target is gone or no longer scales to zero.
+ */
+export async function reconcileDatabaseProxies(): Promise<void> {
+  const proxied = await db
+    .selectFrom("databaseTargets")
+    .innerJoin("databases", "databases.id", "databaseTargets.databaseId")
+    .select(["databaseTargets.id", "databaseTargets.databaseId"])
+    .where("databases.engine", "=", "postgres")
+    .where("databaseTargets.scaleToZeroMinutes", "is not", null)
+    .execute();
+  const databaseIds = new Set(proxied.map((row) => row.databaseId));
+  for (const databaseId of databaseIds) {
+    try {
+      await syncPostgresDatabaseNetworks(await getDatabaseById(databaseId));
+    } catch (error) {
+      console.error("[database-runtime] Proxy reconcile failed", {
+        databaseId,
+        error,
+      });
+    }
+  }
+  // Proxies of other databases: re-checked by a sync under that database's
+  // lock (scale to zero may have been enabled since the query above);
+  // proxies of deleted targets are removed.
+  for (const targetId of await listDatabaseProxyTargetIds()) {
+    if (proxied.some((row) => row.id === targetId)) {
+      continue;
+    }
+    const target = await db
+      .selectFrom("databaseTargets")
+      .select("databaseId")
+      .where("id", "=", targetId)
+      .executeTakeFirst();
+    try {
+      if (target) {
+        await syncPostgresDatabaseNetworks(
+          await getDatabaseById(target.databaseId),
+        );
+      } else {
+        await removeDatabaseProxy(targetId);
+      }
+    } catch (error) {
+      console.error("[database-runtime] Proxy cleanup failed", {
+        targetId,
+        error,
+      });
+    }
   }
 }
 
@@ -1146,6 +1291,42 @@ function wakeTargetForGateway(targetId: string): Promise<number> {
     targetWakePromises.delete(targetId);
   });
   targetWakePromises.set(targetId, wake);
+  return wake;
+}
+
+async function wakeTargetForProxyOnce(targetId: string): Promise<string[]> {
+  return withDatabaseTargetLock(targetId, async function wakeLocked() {
+    let current = await getTargetById(targetId);
+    const providerRef = parseProviderRef(current.providerRefJson);
+    if (
+      current.lifecycleStatus !== "active" ||
+      (await getContainerStatus(providerRef.containerName)) !== "running"
+    ) {
+      current = await startDatabaseTargetUnlocked({
+        databaseId: current.databaseId,
+        targetId: current.id,
+      });
+    }
+    return [parseProviderRef(current.providerRefJson).containerName];
+  });
+}
+
+/**
+ * Called by a target's proxy (POST /activate/target/<id>): wakes the target if
+ * needed and returns where the proxy should forward to (the container name,
+ * resolved by Docker on every connection). Concurrent calls share one wake.
+ */
+export function wakeDatabaseTargetForProxy(
+  targetId: string,
+): Promise<string[]> {
+  const pending = proxyWakePromises.get(targetId);
+  if (pending) {
+    return pending;
+  }
+  const wake = wakeTargetForProxyOnce(targetId).finally(function clearWake() {
+    proxyWakePromises.delete(targetId);
+  });
+  proxyWakePromises.set(targetId, wake);
   return wake;
 }
 
@@ -1252,7 +1433,6 @@ export async function restoreDatabaseTargetGateways(): Promise<void> {
     .selectAll("databaseTargets")
     .where("databaseTargets.scaleToZeroMinutes", "is not", null)
     .where("databaseTargets.kind", "=", "branch")
-    .where("databaseTargets.name", "!=", "main")
     .where("databases.engine", "=", "postgres")
     .execute();
 
@@ -1767,12 +1947,32 @@ export async function stopDatabaseTargetUnlocked(input: {
   targetId: string;
   stoppedReason?: DatabaseTargetStoppedReason | null;
 }): Promise<Selectable<DatabaseTargets>> {
-  const { target } = await resolveDatabaseWithTargetById(
+  const { database, target } = await resolveDatabaseWithTargetById(
     input.databaseId,
     input.targetId,
   );
   const providerRef = parseProviderRef(target.providerRefJson);
-  await stopContainer(providerRef.containerName);
+  const proxied = usesDatabaseProxy(database, target);
+  if (proxied) {
+    // Hold new connections while the database stops; they wake it again.
+    await controlDatabaseProxy(target.id, "pause");
+  }
+  try {
+    if (database.engine === "postgres") {
+      // Fast shutdown (the image's SIGINT): clients get a clean "terminating
+      // connection" error and no crash recovery is needed on the next start.
+      await stopContainerKeepingIt(providerRef.containerName, 30).catch(
+        () => {},
+      );
+    }
+    await stopContainer(providerRef.containerName);
+  } finally {
+    if (proxied) {
+      // Held connections now wake it; if the stop failed, the wake finds it
+      // running.
+      await controlDatabaseProxy(target.id, "sleep");
+    }
+  }
   await setTargetStoppedState({
     targetId: target.id,
     stoppedReason: input.stoppedReason ?? null,
@@ -1787,6 +1987,196 @@ export async function stopDatabaseTargetUnlocked(input: {
 
   clearTargetActivityWrite(target.id);
   return getTargetById(target.id);
+}
+
+export interface PostgresTargetActivity {
+  /** Client connections running a query or inside a transaction. */
+  busy: number;
+  /** Seconds since any client connection last changed state, or null. */
+  idleSeconds: number | null;
+}
+
+const POSTGRES_ACTIVITY_SQL = `select
+  count(*) filter (where state is distinct from 'idle'),
+  coalesce(extract(epoch from now() - max(greatest(state_change, backend_start)))::bigint, -1)
+from pg_stat_activity
+where backend_type = 'client backend' and pid <> pg_backend_pid()`;
+
+export function parsePostgresActivity(output: string): PostgresTargetActivity {
+  const [busy, idle] = output.trim().split(",").map(Number);
+  if (!Number.isInteger(busy) || !Number.isInteger(idle)) {
+    throw new Error(`Unexpected activity output: ${output.trim()}`);
+  }
+  return { busy, idleSeconds: idle < 0 ? null : idle };
+}
+
+/**
+ * What Postgres itself says about its sessions. Works whatever the clients
+ * do (TLS, pools): idle pooled connections are idle; a running query or an
+ * open transaction is busy even when no bytes flow.
+ */
+async function getPostgresTargetActivity(
+  providerRef: ProviderRef,
+): Promise<PostgresTargetActivity> {
+  const { stdout } = await execFileAsync(
+    "docker",
+    [
+      "exec",
+      "-e",
+      "PGPASSWORD",
+      providerRef.containerName,
+      "psql",
+      "-X",
+      "-h",
+      "127.0.0.1",
+      "-U",
+      providerRef.username,
+      "-d",
+      providerRef.database,
+      "-tA",
+      "-F",
+      ",",
+      "-c",
+      POSTGRES_ACTIVITY_SQL,
+    ],
+    {
+      env: { ...process.env, PGPASSWORD: providerRef.password },
+      timeout: 15_000,
+    },
+  );
+  return parsePostgresActivity(stdout);
+}
+
+export function parseProxyIdleSeconds(reply: string): number | null {
+  const match = reply.match(/idle_secs=(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+export function isTargetIdleEnough(input: {
+  activity: PostgresTargetActivity;
+  proxyIdleSeconds: number | null;
+  minIdleSeconds: number;
+}): boolean {
+  const { activity, proxyIdleSeconds, minIdleSeconds } = input;
+  return (
+    activity.busy === 0 &&
+    (activity.idleSeconds === null || activity.idleSeconds >= minIdleSeconds) &&
+    (proxyIdleSeconds === null || proxyIdleSeconds >= minIdleSeconds)
+  );
+}
+
+/** Moves lastActivityAt forward to the newest activity seen. */
+async function recordObservedActivity(input: {
+  target: Selectable<DatabaseTargets>;
+  activity: PostgresTargetActivity;
+  proxyIdleSeconds: number | null;
+}): Promise<void> {
+  const now = Date.now();
+  let at = 0;
+  if (input.activity.busy > 0) {
+    at = now;
+  } else if (input.activity.idleSeconds !== null) {
+    at = now - input.activity.idleSeconds * 1000;
+  }
+  if (input.proxyIdleSeconds !== null) {
+    at = Math.max(at, now - input.proxyIdleSeconds * 1000);
+  }
+  if (at > (input.target.lastActivityAt ?? 0)) {
+    await setTargetActivityAt(input.target.id, at);
+  }
+}
+
+/**
+ * Puts an idle scale-to-zero target to sleep. Caller holds the target lock.
+ * Returns false (and stays awake) when the target turns out to be in use.
+ *
+ * With a proxy: check traffic (proxy) and sessions (Postgres), pause the
+ * proxy, let connections opened just before the pause register, check
+ * Postgres again, then commit. The commit is atomic in the proxy: it refuses
+ * if any client sent bytes since the pause, otherwise it closes every
+ * forwarded connection, so no query reaches a database that is stopping.
+ */
+export async function sleepIdleDatabaseTargetUnlocked(input: {
+  databaseId: string;
+  targetId: string;
+}): Promise<boolean> {
+  const { database, target } = await resolveDatabaseWithTargetById(
+    input.databaseId,
+    input.targetId,
+  );
+  if (
+    target.lifecycleStatus !== "active" ||
+    target.scaleToZeroMinutes === null
+  ) {
+    return false;
+  }
+  if (!usesDatabaseProxy(database, target)) {
+    await stopDatabaseTargetUnlocked({ ...input, stoppedReason: "idle" });
+    return true;
+  }
+
+  const minIdleSeconds = target.scaleToZeroMinutes * 60;
+  const providerRef = parseProviderRef(target.providerRefJson);
+  const status = await controlDatabaseProxy(target.id, "status");
+  if (!status.ok) {
+    // Without a working proxy nothing could wake the target internally.
+    console.warn("[database-runtime] Proxy not answering; staying awake", {
+      targetId: target.id,
+      reply: status.reply,
+    });
+    return false;
+  }
+  const proxyIdleSeconds = parseProxyIdleSeconds(status.reply);
+  const before = await getPostgresTargetActivity(providerRef);
+  if (
+    !isTargetIdleEnough({ activity: before, proxyIdleSeconds, minIdleSeconds })
+  ) {
+    await recordObservedActivity({
+      target,
+      activity: before,
+      proxyIdleSeconds,
+    });
+    return false;
+  }
+
+  let committed = false;
+  try {
+    // A failed pause may still have reached the proxy (e.g. exec timeout),
+    // so it is resumed below either way.
+    const paused = await controlDatabaseProxy(target.id, "pause");
+    if (!paused.ok) {
+      return false;
+    }
+    await sleep(PROXY_PAUSE_SETTLE_MS);
+    const after = await getPostgresTargetActivity(providerRef);
+    if (
+      !isTargetIdleEnough({
+        activity: after,
+        proxyIdleSeconds: null,
+        minIdleSeconds,
+      })
+    ) {
+      await recordObservedActivity({
+        target,
+        activity: after,
+        proxyIdleSeconds: null,
+      });
+      return false;
+    }
+    const commit = await controlDatabaseProxy(target.id, "commit");
+    if (!commit.ok) {
+      await setTargetActivityAt(target.id, Date.now());
+      return false;
+    }
+    committed = true;
+  } finally {
+    if (!committed) {
+      await controlDatabaseProxy(target.id, "resume");
+    }
+  }
+
+  await stopDatabaseTargetUnlocked({ ...input, stoppedReason: "idle" });
+  return true;
 }
 
 /** Caller must hold the target lock (see withDatabaseTargetLock). */
@@ -1811,6 +2201,7 @@ export async function deleteDatabaseTargetUnlocked(input: {
   }
 
   await stopDatabaseTargetGateway(target.id);
+  await removeDatabaseProxy(target.id);
   clearTargetActivityWrite(target.id);
   await stopContainer(providerRef.containerName);
   if (database.engine === "postgres") {
@@ -1846,6 +2237,7 @@ export async function deleteDatabase(databaseId: string): Promise<void> {
 
   for (const { target, providerRef } of parsedTargets) {
     await stopDatabaseTargetGateway(target.id);
+    await removeDatabaseProxy(target.id);
     clearTargetActivityWrite(target.id);
     await stopContainer(providerRef.containerName);
   }
@@ -2254,9 +2646,6 @@ async function patchDatabaseTargetRuntimeSettingsUnlocked(input: {
   if (input.scaleToZeroMinutes !== undefined) {
     nextScaleToZeroMinutes = input.scaleToZeroMinutes;
   }
-  if (nextScaleToZeroMinutes !== null && target.name === "main") {
-    throw new Error("main cannot use scale to zero");
-  }
   if (
     nextScaleToZeroMinutes !== null &&
     (database.engine !== "postgres" || target.kind !== "branch")
@@ -2389,6 +2778,18 @@ async function patchDatabaseTargetRuntimeSettingsUnlocked(input: {
         })
         .where("id", "=", target.id)
         .execute();
+
+      // Nothing would wake a sleeping target any more (its proxy and gateway
+      // go away), so turning scale to zero off brings it back up.
+      if (
+        target.lifecycleStatus !== "active" &&
+        target.stoppedReason === "idle"
+      ) {
+        await startDatabaseTargetUnlocked({
+          databaseId: database.id,
+          targetId: target.id,
+        });
+      }
     }
   } else if (nextScaleToZeroMinutes !== null) {
     await db

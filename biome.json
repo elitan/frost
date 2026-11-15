@@ -22,6 +22,7 @@
       "**",
       "!**/.next",
       "!**/node_modules",
+      "!apps/activator/target",
       "!**/data",
       "!**/repos",
       "!**/postgres-source",

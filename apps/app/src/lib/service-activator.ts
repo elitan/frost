@@ -258,6 +258,8 @@ export async function reconcileServiceActivators(
 
 export interface ActivatorControlOptions {
   ensureServiceAwake: (serviceId: string) => Promise<number[]>;
+  /** Database proxies: wakes the target, returns hosts to forward to. */
+  wakeDatabaseTarget?: (targetId: string) => Promise<string[]>;
 }
 
 /** Wakes the service, then returns its container IPs, one per line. */
@@ -281,21 +283,35 @@ export function createActivatorControlServer(
   options: ActivatorControlOptions,
 ): Server {
   const server = createServer(async function onRequest(req, res) {
-    const match = req.url?.match(/^\/activate\/([A-Za-z0-9_-]+)$/);
+    const match = req.url?.match(/^\/activate\/(target\/)?([A-Za-z0-9_-]+)$/);
     const remote = req.socket.remoteAddress ?? "";
     if (req.method !== "POST" || !match) {
       res.writeHead(404).end();
       return;
     }
-    const serviceId = match[1];
+    const isTarget = match[1] !== undefined;
+    const id = match[2];
+    const tokenSubject = isTarget ? `target:${id}` : id;
     const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
-    if (!isPrivateAddress(remote) || !isValidActivatorToken(serviceId, token)) {
+    if (
+      !isPrivateAddress(remote) ||
+      !isValidActivatorToken(tokenSubject, token)
+    ) {
       res.writeHead(403).end();
       return;
     }
+    const serviceId = id;
     try {
-      const ips = await activate(serviceId, options);
-      const body = `${ips.join("\n")}\n`;
+      let hosts: string[];
+      if (isTarget) {
+        if (!options.wakeDatabaseTarget) {
+          throw new Error("Database proxies are not supported");
+        }
+        hosts = await options.wakeDatabaseTarget(id);
+      } else {
+        hosts = await activate(serviceId, options);
+      }
+      const body = `${hosts.join("\n")}\n`;
       res.writeHead(200, {
         "content-type": "text/plain",
         "content-length": Buffer.byteLength(body),

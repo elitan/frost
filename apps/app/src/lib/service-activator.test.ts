@@ -61,6 +61,10 @@ describe("activator control server", () => {
         woken.push(serviceId);
         return [];
       },
+      wakeDatabaseTarget: async (targetId) => {
+        woken.push(`target:${targetId}`);
+        return [`frost-db-${targetId}`];
+      },
     });
     const port = await new Promise<number>((resolve) => {
       server?.listen(0, "127.0.0.1", () => {
@@ -97,5 +101,33 @@ describe("activator control server", () => {
     // after the wake was requested.
     expect(response.status).toBe(503);
     expect(woken).toEqual(["svc_missing"]);
+  });
+
+  test("wakes database targets with a target token only", async () => {
+    const { port, woken } = await start();
+    const url = `http://127.0.0.1:${port}/activate/target/dbt_1`;
+    const withServiceToken = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${activatorToken("dbt_1")}` },
+    });
+    expect(withServiceToken.status).toBe(403);
+    const onServiceRoute = await fetch(
+      `http://127.0.0.1:${port}/activate/dbt_1`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${activatorToken("target:dbt_1")}` },
+      },
+    );
+    expect(onServiceRoute.status).toBe(403);
+    expect(woken).toEqual([]);
+
+    const ok = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${activatorToken("target:dbt_1")}` },
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-length")).toBe("15");
+    expect(await ok.text()).toBe("frost-db-dbt_1\n");
+    expect(woken).toEqual(["target:dbt_1"]);
   });
 });
