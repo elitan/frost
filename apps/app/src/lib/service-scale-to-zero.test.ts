@@ -165,7 +165,7 @@ function installFakes(now: () => number): FakeDocker {
   };
   setScaleToZeroDepsForTests({
     getNow: now,
-    getContainerNetworkBytes: async (containerId) =>
+    getContainerTrafficCounter: async (containerId) =>
       fake.bytes.get(containerId) ?? 1000,
     startContainer: async (containerId) => {
       fake.started.push(containerId);

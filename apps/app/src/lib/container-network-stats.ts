@@ -1,5 +1,6 @@
 import { exec } from "node:child_process";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { request } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -53,15 +54,53 @@ export function sumNetworkBytes(stats: unknown): number {
   return total;
 }
 
-function fetchStatsFromSocket(
-  socketPath: string,
-  containerId: string,
-): Promise<unknown> {
+/**
+ * Sums TCP segments and UDP datagrams in and out from a `/proc/<pid>/net/snmp`
+ * file. Unlike interface byte counters, these ignore ARP, ICMPv6 and stray
+ * multicast on the Docker bridge, so an idle container reads as idle.
+ */
+export function parseSnmpTrafficCount(content: string): number | null {
+  const sections = new Map<string, Map<string, number>>();
+  const headers = new Map<string, string[]>();
+  for (const line of content.split("\n")) {
+    const match = line.match(/^(\w+):\s+(.*)$/);
+    if (!match) continue;
+    const [, section, rest] = match;
+    const fields = rest.trim().split(/\s+/);
+    const header = headers.get(section);
+    if (!header) {
+      headers.set(section, fields);
+      continue;
+    }
+    const values = new Map<string, number>();
+    header.forEach(function mapField(name, index) {
+      values.set(name, Number(fields[index]));
+    });
+    sections.set(section, values);
+  }
+  const tcp = sections.get("Tcp");
+  const udp = sections.get("Udp");
+  if (!tcp) return null;
+  const counters = [
+    tcp.get("InSegs"),
+    tcp.get("OutSegs"),
+    udp?.get("InDatagrams") ?? 0,
+    udp?.get("OutDatagrams") ?? 0,
+  ];
+  let total = 0;
+  for (const value of counters) {
+    if (value === undefined || !Number.isFinite(value)) return null;
+    total += value;
+  }
+  return total;
+}
+
+function fetchFromSocket(socketPath: string, path: string): Promise<unknown> {
   return new Promise(function fetchStats(resolve, reject) {
     const req = request(
       {
         socketPath,
-        path: `/containers/${encodeURIComponent(containerId)}/stats?stream=false&one-shot=true`,
+        path,
         method: "GET",
         timeout: DOCKER_API_TIMEOUT_MS,
       },
@@ -72,9 +111,7 @@ function fetchStatsFromSocket(
         });
         res.on("end", function onEnd() {
           if (res.statusCode !== 200) {
-            reject(
-              new Error(`Docker stats API returned ${res.statusCode ?? "?"}`),
-            );
+            reject(new Error(`Docker API returned ${res.statusCode ?? "?"}`));
             return;
           }
           try {
@@ -87,7 +124,7 @@ function fetchStatsFromSocket(
       },
     );
     req.on("timeout", function onTimeout() {
-      req.destroy(new Error("Docker stats API timed out"));
+      req.destroy(new Error("Docker API timed out"));
     });
     req.on("error", reject);
     req.end();
@@ -115,7 +152,10 @@ export async function getContainerNetworkBytes(
   if (socketPath) {
     try {
       return sumNetworkBytes(
-        await fetchStatsFromSocket(socketPath, containerId),
+        await fetchFromSocket(
+          socketPath,
+          `/containers/${encodeURIComponent(containerId)}/stats?stream=false&one-shot=true`,
+        ),
       );
     } catch {
       // Fall through to the CLI.
@@ -126,4 +166,59 @@ export async function getContainerNetworkBytes(
   } catch {
     return null;
   }
+}
+
+async function getContainerPid(containerId: string): Promise<number | null> {
+  let pid: unknown = null;
+  const socketPath = resolveDockerSocketPath();
+  if (socketPath) {
+    try {
+      const info = (await fetchFromSocket(
+        socketPath,
+        `/containers/${encodeURIComponent(containerId)}/json`,
+      )) as { State?: { Pid?: unknown } };
+      pid = info.State?.Pid ?? null;
+    } catch {
+      // Fall through to the CLI.
+    }
+  }
+  if (pid === null) {
+    try {
+      const { stdout } = await execAsync(
+        `docker inspect --format '{{.State.Pid}}' ${shellEscape(containerId)}`,
+      );
+      pid = Number(stdout.trim());
+    } catch {
+      return null;
+    }
+  }
+  return typeof pid === "number" && Number.isInteger(pid) && pid > 0
+    ? pid
+    : null;
+}
+
+/**
+ * A counter that grows whenever a container sends or receives traffic. On
+ * Linux (where Frost runs in production, as root) it reads the container's
+ * TCP/UDP counters from /proc, which ignore background bridge noise. Elsewhere
+ * (e.g. Docker Desktop, where the container's /proc is inside a VM) it falls
+ * back to interface byte counters. Returns null when it can't be measured.
+ */
+export async function getContainerTrafficCounter(
+  containerId: string,
+): Promise<number | null> {
+  if (process.platform === "linux") {
+    const pid = await getContainerPid(containerId);
+    if (pid !== null) {
+      try {
+        const count = parseSnmpTrafficCount(
+          await readFile(`/proc/${pid}/net/snmp`, "utf8"),
+        );
+        if (count !== null) return count;
+      } catch {
+        // Fall back to byte counters.
+      }
+    }
+  }
+  return getContainerNetworkBytes(containerId);
 }

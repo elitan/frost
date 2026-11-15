@@ -1,4 +1,4 @@
-import { getContainerNetworkBytes as getContainerNetworkBytesDefault } from "./container-network-stats";
+import { getContainerTrafficCounter as getContainerTrafficCounterDefault } from "./container-network-stats";
 import { db } from "./db";
 import {
   startContainer as startContainerDefault,
@@ -40,7 +40,7 @@ export class ServiceWakeError extends Error {
 
 interface Deps {
   getNow: () => number;
-  getContainerNetworkBytes: (containerId: string) => Promise<number | null>;
+  getContainerTrafficCounter: (containerId: string) => Promise<number | null>;
   startContainer: (containerId: string) => Promise<void>;
   stopContainer: (containerId: string, timeoutSeconds: number) => Promise<void>;
   waitForHealthy: typeof waitForHealthyDefault;
@@ -49,7 +49,7 @@ interface Deps {
 
 const defaultDeps: Deps = {
   getNow: Date.now,
-  getContainerNetworkBytes: getContainerNetworkBytesDefault,
+  getContainerTrafficCounter: getContainerTrafficCounterDefault,
   startContainer: startContainerDefault,
   stopContainer: stopContainerDefault,
   waitForHealthy: waitForHealthyDefault,
@@ -67,6 +67,7 @@ export function resetScaleToZeroStateForTests(): void {
   lastNetworkBytes.clear();
   activeProxyConnections.clear();
   wakesInFlight.clear();
+  unmeasurableContainers.clear();
 }
 
 /** Last measured network byte total per deployment (all replicas). */
@@ -74,6 +75,8 @@ const lastNetworkBytes = new Map<string, number>();
 /** Connections the wake server is currently proxying, per service. */
 const activeProxyConnections = new Map<string, number>();
 const wakesInFlight = new Map<string, Promise<number[]>>();
+/** Containers already warned about, so the log isn't repeated every tick. */
+const unmeasurableContainers = new Set<string>();
 
 function lockKey(serviceId: string): string {
   return `service-scale-to-zero:${serviceId}`;
@@ -227,8 +230,14 @@ async function measureNetworkBytes(
 ): Promise<number | null> {
   let total = 0;
   for (const container of service.containers) {
-    const bytes = await deps.getContainerNetworkBytes(container.containerId);
+    const bytes = await deps.getContainerTrafficCounter(container.containerId);
     if (bytes === null) {
+      if (!unmeasurableContainers.has(container.containerId)) {
+        unmeasurableContainers.add(container.containerId);
+        console.warn(
+          `[scale-to-zero] Can't measure traffic for container ${container.containerId}; service ${service.serviceId} stays awake`,
+        );
+      }
       return null;
     }
     total += bytes;
