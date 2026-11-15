@@ -1,10 +1,11 @@
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { isIP } from "node:net";
 import { promisify } from "node:util";
 import pkg from "../../package.json";
 import { db } from "./db";
+import { createNetwork } from "./docker";
 import { getRequiredJwtSecret } from "./jwt-secret";
 import { shellEscape } from "./shell-escape";
 import { slugify } from "./slugify";
@@ -21,6 +22,8 @@ import { slugify } from "./slugify";
  */
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+const PROBE_NETWORK = "frost-activator-probe";
 
 const globalForActivator = globalThis as typeof globalThis & {
   frostActivatorControlServer?: Server;
@@ -32,14 +35,12 @@ const ACTIVATOR_LABEL = "frost.activator";
 const DEFAULT_CONTROL_PORT = 3091;
 
 /**
- * The wake proxy image: published with each release (install and update
- * pull it; source installs build it and set FROST_ACTIVATOR_IMAGE).
+ * The wake proxy image, built locally by install.sh/update.sh: from the
+ * release tarball's binaries as frost-activator:<version>, or from source
+ * (which sets FROST_ACTIVATOR_IMAGE).
  */
 export function getActivatorImage(): string {
-  return (
-    process.env.FROST_ACTIVATOR_IMAGE ||
-    `ghcr.io/elitan/frost-activator:${pkg.version}`
-  );
+  return process.env.FROST_ACTIVATOR_IMAGE || `frost-activator:${pkg.version}`;
 }
 
 function getConfiguredControlPort(): number {
@@ -364,8 +365,13 @@ export function createActivatorControlServer(
   options: ActivatorControlOptions,
 ): Server {
   const server = createServer(async function onRequest(req, res) {
-    const match = req.url?.match(/^\/activate\/(target\/)?([A-Za-z0-9_-]+)$/);
     const remote = req.socket.remoteAddress ?? "";
+    if (req.method === "GET" && req.url === "/healthz") {
+      // The startup probe: answered for container sources only.
+      res.writeHead(isPrivateAddress(remote) ? 200 : 403).end();
+      return;
+    }
+    const match = req.url?.match(/^\/activate\/(target\/)?([A-Za-z0-9_-]+)$/);
     if (req.method !== "POST" || !match) {
       res.writeHead(404).end();
       return;
@@ -430,8 +436,61 @@ export async function startActivatorControlServer(
     ...endpoint,
     port: typeof address === "object" && address ? address.port : endpoint.port,
   };
+  try {
+    await probeActivatorEndpoint(bound);
+  } catch (error) {
+    globalForActivator.frostActivatorControlServer = undefined;
+    await new Promise((resolve) => server.close(resolve));
+    throw error;
+  }
+  // Only now do wake proxies start (see getActivatorHostGateway).
   globalForActivator.frostActivatorEndpoint = bound;
   return bound;
+}
+
+/**
+ * Checks, from a container on a Docker network like the ones services use,
+ * that the wake endpoint answers. Fails when the proxy image is missing or a
+ * host firewall drops container-to-host traffic; Frost then runs without
+ * wake proxies (services wake through their domains, databases sleep without
+ * a proxy) instead of starting proxies nothing could wake.
+ */
+async function probeActivatorEndpoint(
+  endpoint: ActivatorEndpoint,
+): Promise<void> {
+  await createNetwork(PROBE_NETWORK, { "frost.managed": "true" });
+  try {
+    await execFileAsync(
+      "docker",
+      [
+        "run",
+        "--rm",
+        "--network",
+        PROBE_NETWORK,
+        "--add-host",
+        `host.docker.internal:${endpoint.hostGateway}`,
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        getActivatorImage(),
+        "probe",
+        `http://host.docker.internal:${endpoint.port}/healthz`,
+      ],
+      { timeout: 60_000 },
+    );
+  } catch (error) {
+    const detail =
+      error && typeof error === "object" && "stderr" in error
+        ? String(error.stderr).trim()
+        : String(error);
+    throw new Error(
+      `Containers can't reach the wake endpoint on ${endpoint.bindHost}:${endpoint.port} ` +
+        `(image ${getActivatorImage()}): ${detail}. ` +
+        `If a host firewall blocks traffic from Docker networks to the host, allow TCP port ${endpoint.port} from them.`,
+    );
+  }
 }
 
 export async function stopActivatorControlServer(): Promise<void> {

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Builds the frost-activator image for this machine. Releases publish it as
-# ghcr.io/elitan/frost-activator:<version> (see .github/workflows/release.yml).
+# Builds the frost-activator image for this machine. Releases ship static
+# binaries in the tarball instead (see .github/workflows/release.yml).
 # Usage: ./build.sh            -> frost-activator:dev
 #        IMAGE=name:tag ./build.sh
 set -euo pipefail

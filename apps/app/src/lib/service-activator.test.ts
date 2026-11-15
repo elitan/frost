@@ -104,6 +104,11 @@ describe("activator control server", () => {
     expect(woken).toEqual(["svc_missing"]);
   });
 
+  test("answers the startup probe", async () => {
+    const { port } = await start();
+    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+  });
+
   test("wakes database targets with a target token only", async () => {
     const { port, woken } = await start();
     const url = `http://127.0.0.1:${port}/activate/target/dbt_1`;

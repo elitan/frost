@@ -46,6 +46,8 @@
 //!
 //! `frost-activator ctl <command>` sends a command to the resident process in
 //! the same container (for `docker exec`) and prints its answer.
+//! `frost-activator probe <url>` exits 0 if the URL answers 200 (Frost's
+//! startup check that containers can reach its wake endpoint).
 
 use std::collections::HashMap;
 use std::env;
@@ -797,6 +799,48 @@ fn serve_control(shared: Arc<Shared>, port: u16) -> ! {
 }
 
 /// `frost-activator ctl <command>`: talks to the resident process.
+/// Status code of a plain HTTP GET (used by `probe`).
+fn http_get_status(url: &str, timeout: Duration) -> io::Result<u16> {
+    let (host, port, path) = parse_url(url)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "bad url"))?;
+    let addr = (host.as_str(), port)
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "host did not resolve"))?;
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    stream.write_all(
+        format!("GET {path} HTTP/1.0\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n").as_bytes(),
+    )?;
+    let mut head = String::new();
+    BufReader::new(stream.take(1024)).read_line(&mut head)?;
+    head.split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "malformed response"))
+}
+
+/// `frost-activator probe <url>`: exits 0 if the URL answers 200. Frost runs
+/// it in a container at startup to check the wake endpoint is reachable from
+/// container networks (a host firewall can block it).
+fn run_probe(url: &str) -> ! {
+    match http_get_status(url, Duration::from_secs(5)) {
+        Ok(200) => {
+            println!("ok");
+            process::exit(0);
+        }
+        Ok(code) => {
+            eprintln!("probe got HTTP {code}");
+            process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("probe failed: {error}");
+            process::exit(1);
+        }
+    }
+}
+
 fn run_ctl(command: &str) -> ! {
     let result = (|| -> io::Result<String> {
         let addr = SocketAddr::from(([127, 0, 0, 1], control_port()));
@@ -847,6 +891,13 @@ fn standby_exit_loop(shared: &Shared, config: &Config) -> ! {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if args.get(1).map(String::as_str) == Some("probe") {
+        let Some(url) = args.get(2) else {
+            eprintln!("usage: frost-activator probe http://host:port/path");
+            process::exit(2);
+        };
+        run_probe(url);
+    }
     if args.get(1).map(String::as_str) == Some("ctl") {
         let Some(command) = args.get(2) else {
             eprintln!("usage: frost-activator ctl pause|commit|sleep|resume|status");
@@ -963,6 +1014,25 @@ mod tests {
         assert!(idle >= 1, "{reply}");
         shared.touch();
         assert_eq!(shared.idle_secs(), 0);
+    }
+
+    #[test]
+    fn http_get_status_reads_the_status_line() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            for code in ["200 OK", "403 Forbidden"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 256];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(format!("HTTP/1.1 {code}\r\n\r\n").as_bytes());
+            }
+        });
+        let url = format!("http://127.0.0.1:{port}/healthz");
+        assert_eq!(http_get_status(&url, Duration::from_secs(2)).unwrap(), 200);
+        assert_eq!(http_get_status(&url, Duration::from_secs(2)).unwrap(), 403);
+        server.join().unwrap();
+        assert!(http_get_status("http://127.0.0.1:1/x", Duration::from_secs(1)).is_err());
     }
 
     #[test]

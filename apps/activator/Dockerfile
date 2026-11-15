@@ -17,6 +17,11 @@ RUN target="$(cat /rust-target)" \
  && cargo build --release --locked --target "$target" \
  && cp "target/$target/release/frost-activator" /frost-activator
 
+# Just the binary: `docker buildx build --target binary --output type=local`
+# (releases ship these in the tarball; see Dockerfile.prebuilt).
+FROM scratch AS binary
+COPY --from=build /frost-activator /frost-activator
+
 FROM scratch
 LABEL org.opencontainers.image.source="https://github.com/elitan/frost"
 LABEL org.opencontainers.image.description="Frost scale-to-zero wake proxy"

@@ -361,27 +361,35 @@ ensure_zfs_branching_setup() {
 }
 
 
-# Wake proxy for scale to zero (internal wake, Postgres). Source installs
-# build it from this checkout; releases pull the image published with the
-# release. Not fatal: without it, services wake only through their domains and
-# Postgres branches sleep without a proxy. Keep in sync with install.sh.
+# Wake proxy for scale to zero (internal wake, Postgres). Release tarballs
+# ship static binaries (activator/<arch>/); source checkouts build it from
+# apps/activator. Either way the image is built locally, nothing is pulled.
+# Not fatal: without it Frost runs without wake proxies (services wake through
+# their domains, Postgres branches sleep without a proxy). Keep in sync with
+# install.sh.
 ensure_activator_image() {
   local env_file="$FROST_DIR/.env"
+  local arch
+  case "$(uname -m)" in
+    x86_64) arch="amd64" ;;
+    aarch64 | arm64) arch="arm64" ;;
+    *) arch="" ;;
+  esac
   sed -i '/^FROST_ACTIVATOR_IMAGE=frost-activator:source$/d' "$env_file" 2>/dev/null || true
   if [ -f "$FROST_DIR/apps/activator/Dockerfile" ]; then
     if docker build -q -t frost-activator:source "$FROST_DIR/apps/activator" > /dev/null; then
       echo "FROST_ACTIVATOR_IMAGE=frost-activator:source" >> "$env_file"
-    else
-      log "Warning: could not build the wake proxy image; internal wake disabled"
+      return 0
     fi
-    return 0
+  elif [ -n "$arch" ] && [ -x "$FROST_DIR/activator/$arch/frost-activator" ]; then
+    local version
+    version=$(grep '"version"' "$FROST_DIR/package.json" 2>/dev/null | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+    # Frost uses frost-activator:<its version> by default.
+    if docker build -q -f "$FROST_DIR/activator/Dockerfile" -t "frost-activator:$version" "$FROST_DIR/activator/$arch" > /dev/null; then
+      return 0
+    fi
   fi
-  local version
-  version=$(grep '"version"' "$FROST_DIR/package.json" 2>/dev/null | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
-  if [ -n "$version" ] && docker pull -q "ghcr.io/elitan/frost-activator:$version" > /dev/null 2>&1; then
-    return 0
-  fi
-  log "Warning: could not pull ghcr.io/elitan/frost-activator:$version; Frost retries on first use"
+  log "Warning: no wake proxy image; scale to zero runs without internal wake"
 }
 
 get_package_version() {

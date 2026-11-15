@@ -1,0 +1,6 @@
+# Image from a prebuilt binary (release tarballs ship one per architecture).
+# install.sh/update.sh: docker build -f Dockerfile.prebuilt <dir with frost-activator>
+FROM scratch
+COPY frost-activator /frost-activator
+USER 65534:65534
+ENTRYPOINT ["/frost-activator"]

@@ -19,6 +19,7 @@ import {
 } from "./database-target-proxy";
 import { db } from "./db";
 import {
+  getActivatorHostGateway,
   startActivatorControlServer,
   stopActivatorControlServer,
 } from "./service-activator";
@@ -44,6 +45,33 @@ async function docker(...args: string[]): Promise<string> {
 async function containerState(name: string): Promise<string | null> {
   return docker("inspect", "-f", "{{.State.Status}}", name).catch(() => null);
 }
+
+describe.skipIf(!hasImage)("wake endpoint probe (docker)", () => {
+  test("without a usable proxy image the endpoint isn't used", async () => {
+    process.env.FROST_ACTIVATOR_IMAGE =
+      "frost-activator:missing-image-for-test";
+    process.env.FROST_ACTIVATOR_PORT = "0";
+    try {
+      await expect(
+        startActivatorControlServer({ ensureServiceAwake: async () => [] }),
+      ).rejects.toThrow("can't reach the wake endpoint");
+      expect(getActivatorHostGateway()).toBeNull();
+    } finally {
+      await stopActivatorControlServer();
+    }
+  }, 60_000);
+
+  test("with the image, containers reach it and proxies may start", async () => {
+    process.env.FROST_ACTIVATOR_IMAGE = IMAGE;
+    process.env.FROST_ACTIVATOR_PORT = "0";
+    try {
+      await startActivatorControlServer({ ensureServiceAwake: async () => [] });
+      expect(getActivatorHostGateway()).toMatch(/^host\.docker\.internal:/);
+    } finally {
+      await stopActivatorControlServer();
+    }
+  }, 60_000);
+});
 
 describe.skipIf(!hasImage)("database target proxy (docker)", () => {
   // Short ids keep the network name under Docker's 63-character cap.

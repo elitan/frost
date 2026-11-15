@@ -41,7 +41,7 @@ Idle connections in a pool don't keep it awake. When a database sleeps, Frost cl
 
 With scale to zero on, a branch you stop by hand also starts again on the next connection. Turning scale to zero off starts a sleeping branch.
 
-The proxy reaches Frost on port 3091 of the Docker bridge (e.g. `172.17.0.1`). If you run a host firewall that blocks traffic from containers to the host, allow that port from Docker's networks, or connections to a sleeping database will wait and then fail.
+The proxy reaches Frost on port 3091 of the Docker bridge (e.g. `172.17.0.1`). Frost checks this at startup. If a host firewall blocks traffic from containers to the host, Frost logs which port to allow and runs without the proxy: databases still sleep, but wake only on their public port.
 
 ## Limitations
 

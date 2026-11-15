@@ -71,16 +71,21 @@ docker buildx build --platform linux/amd64,linux/arm64 apps/activator
 The Dockerfile cross-compiles with `rust-lld` on the build machine's
 architecture (no emulation) into a `scratch` image.
 
-- **Releases** publish `ghcr.io/elitan/frost-activator:<version>` (and
-  `latest`) for amd64 and arm64. Frost uses the image matching its own
-  version; `install.sh` and `update.sh` pull it.
+- **Releases** ship static binaries for amd64 and arm64 in the tarball
+  (`activator/<arch>/`, covered by SHA256SUMS). `install.sh` and `update.sh`
+  build `frost-activator:<version>` from them with `Dockerfile.prebuilt`;
+  nothing is pulled from a registry. Frost uses that tag by default.
 - **Source installs** (`install.sh -b <branch>`, git-mode updates) build
   `frost-activator:source` from the checkout and set `FROST_ACTIVATOR_IMAGE`.
 - `FROST_ACTIVATOR_IMAGE` overrides the image (local dev: `frost-activator:dev`).
 
-If the image isn't available, nothing breaks: sleeping services wake only
-through their domains, and Postgres branches sleep without a proxy (waking on
-their public port), as before internal wake existed.
+At startup Frost runs the image once on a Docker network
+(`frost-activator probe`) to check containers can reach its wake endpoint.
+If that fails (no image, or a host firewall blocking containers from the
+host), Frost logs why and runs without wake proxies. Nothing breaks:
+sleeping services wake only through their domains, and Postgres branches
+sleep without a proxy (waking on their public port), as before internal wake
+existed.
 
 ## Wake endpoint
 
@@ -94,7 +99,8 @@ Frost listens for wake requests on port 3091 (`FROST_ACTIVATOR_PORT`):
 
 Requests also need a per-service (or per-branch) token and a private source
 address. A host firewall that drops traffic from Docker networks to the host
-blocks wake-ups; allow port 3091 from Docker's address ranges.
+blocks wake-ups; the startup probe detects that (see above) and Frost logs
+which port to allow.
 
 ## Known limitations
 
