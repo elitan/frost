@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
+import { PassThrough } from "node:stream";
 import { SERVICE_WAKE_HEADER } from "./scale-to-zero-config";
 import {
   getActiveProxyConnections,
@@ -238,5 +239,29 @@ describe("service wake server", () => {
     expect(upgrade.url).toBe("/ws");
     expect(upgrade.headers.host).toBe("app.example.com");
     expect(upgrade.headers[SERVICE_WAKE_HEADER]).toBeUndefined();
+  });
+
+  test("survives a client socket error while the service wakes", async () => {
+    let finishWake: (ports: number[]) => void = () => {};
+    const wake = createServiceWakeServer({
+      ensureServiceAwake: () =>
+        new Promise<number[]>((resolve) => {
+          finishWake = resolve;
+        }),
+    });
+    const socket = new PassThrough();
+    const req = {
+      headers: { [SERVICE_WAKE_HEADER]: "svc-6" },
+      rawHeaders: [],
+      method: "GET",
+      url: "/ws",
+      httpVersion: "1.1",
+    };
+    wake.emit("upgrade", req, socket, Buffer.alloc(0));
+
+    expect(() => socket.emit("error", new Error("ECONNRESET"))).not.toThrow();
+    finishWake([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(socket.destroyed).toBe(true);
   });
 });

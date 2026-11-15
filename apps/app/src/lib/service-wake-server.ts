@@ -181,6 +181,11 @@ export function createServiceWakeServer(
 
     const release = trackProxyConnection(serviceId);
     socket.on("close", release);
+    // Node drops its own error listener from upgraded sockets, so a client
+    // reset while the service wakes would otherwise crash the process.
+    socket.on("error", function onEarlySocketError() {
+      socket.destroy();
+    });
 
     let ports: number[];
     try {
