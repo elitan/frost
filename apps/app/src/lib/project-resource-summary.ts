@@ -25,7 +25,11 @@ export type ProjectResourceSummaryTone =
 
 function countOnline(resources: ProjectResourceItem[]): number {
   return resources.filter(function isOnline(resource) {
-    return resource.runtimeStatus === "online";
+    // Sleeping (scale-to-zero) services are healthy; they wake on traffic.
+    return (
+      resource.runtimeStatus === "online" ||
+      resource.runtimeStatus === "sleeping"
+    );
   }).length;
 }
 

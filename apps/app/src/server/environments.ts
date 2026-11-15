@@ -167,6 +167,7 @@ export const environments = {
               volumes,
               drainTimeout: service.drainTimeout,
               requestTimeout: service.requestTimeout,
+              scaleToZeroMinutes: service.scaleToZeroMinutes,
               replicaCount: service.replicaCount,
               autoDeploy: Boolean(service.autoDeploy),
               frostFilePath: service.frostFilePath,

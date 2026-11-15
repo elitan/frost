@@ -38,6 +38,7 @@ const navigation: NavSection[] = [
       { title: "Environment Variables", href: "/docs/guides/env-vars" },
       { title: "Custom Domains", href: "/docs/guides/custom-domains" },
       { title: "Config File", href: "/docs/guides/config-file" },
+      { title: "Scale to Zero", href: "/docs/guides/scale-to-zero" },
       { title: "AI Project Setup", href: "/docs/guides/ai-setup" },
     ],
   },

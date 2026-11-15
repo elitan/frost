@@ -98,6 +98,21 @@ export function useDeployService(id: string, environmentId: string) {
   });
 }
 
+export function useWakeService(id: string, environmentId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => orpc.services.wake.call({ serviceId: id }),
+    onSuccess: async () => {
+      await queryClient.refetchQueries({
+        queryKey: orpc.services.get.key({ input: { serviceId: id } }),
+      });
+      await queryClient.refetchQueries({
+        queryKey: orpc.services.list.key({ input: { environmentId } }),
+      });
+    },
+  });
+}
+
 export function useServiceVolumes(id: string) {
   return useQuery(
     orpc.services.getVolumes.queryOptions({ input: { serviceId: id } }),

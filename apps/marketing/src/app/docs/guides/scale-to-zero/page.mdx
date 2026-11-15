@@ -1,0 +1,57 @@
+# Scale to Zero
+
+Stop a service when nobody is using it, and start it again on the next request.
+
+Scale to zero is **on by default**: app services sleep after 15 minutes without traffic. Set **Always on** for services that must not sleep (see [Limitations](#limitations)).
+
+## How it works
+
+1. Frost watches each service's network traffic.
+2. When a service has had no traffic for the configured number of minutes, Frost routes its domains to a small wake proxy and stops its containers. The containers are kept, not removed.
+3. The next request to one of its domains is held while Frost starts the containers and waits for the health check to pass.
+4. Frost answers the held request, then routes the domains straight to the service again.
+
+The first request after a sleep waits for the cold start: container start plus health check. Keep the image's startup fast if that matters to you.
+
+A sleeping service shows as **sleeping** in the dashboard. Click **Wake now** to start it without sending a request.
+
+## Limitations
+
+- Only requests to the service's **domains** wake it. Requests from other services over the project network, or straight to its host port, do not. Set internal-only services (e.g. an API only other services call) and background workers to **Always on**.
+- Any network traffic counts as activity, including outbound calls the app makes itself. A service that polls something every few minutes will never sleep.
+- Long-lived connections (WebSockets) are closed when the service sleeps. A connection that stays open through the wake proxy keeps it awake.
+- Volumes are kept while a service sleeps.
+
+## Configuration
+
+The setting takes effect on the next deploy.
+
+### UI
+
+Set **Scale to Zero** under the service's **Runtime** settings.
+
+### frost.yaml
+
+```yaml
+deploy:
+  scale_to_zero_minutes: 15
+```
+
+Set it to `false` to keep the service always on, even when the UI setting is on.
+
+| Field | Description |
+|-------|-------------|
+| `deploy.scale_to_zero_minutes` | Minutes without traffic before the service sleeps (1-10080, default 15), or `false` to disable |
+
+### API
+
+```bash
+# change the idle time, or pass null for always on (redeploy to apply)
+curl -X PATCH https://frost.example.com/api/services/<id> \
+  -H "X-Frost-Token: <api-key>" -H "Content-Type: application/json" \
+  -d '{"scaleToZeroMinutes": 60}'
+
+# sleep or wake right now
+curl -X POST https://frost.example.com/api/services/<id>/sleep -H "X-Frost-Token: <api-key>"
+curl -X POST https://frost.example.com/api/services/<id>/wake -H "X-Frost-Token: <api-key>"
+```

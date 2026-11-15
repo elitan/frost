@@ -138,7 +138,7 @@ export async function getSystemStats(): Promise<SystemStats> {
   };
 }
 
-function parseBytes(str: string): number {
+export function parseBytes(str: string): number {
   const match = str.match(/^([\d.]+)([KMGT]?i?B)?$/i);
   if (!match) return 0;
   const num = parseFloat(match[1]);

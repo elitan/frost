@@ -276,9 +276,14 @@ async function markDeploymentRunningAndSetCurrentServiceDeployment(
       return false;
     }
 
+    // A new live deployment is awake; idle time restarts from now.
     await trx
       .updateTable("services")
-      .set({ currentDeploymentId: deploymentId })
+      .set({
+        currentDeploymentId: deploymentId,
+        sleepingSince: null,
+        lastActivityAt: finishedAt,
+      })
       .where("id", "=", serviceId)
       .execute();
     return true;
@@ -1713,6 +1718,10 @@ async function runServiceDeployment(
         healthCheckPath: effectiveService.healthCheckPath,
         healthCheckTimeout: effectiveService.healthCheckTimeout,
         volumes: service.volumes,
+        scaleToZeroMinutes:
+          service.serviceType === "app"
+            ? effectiveService.scaleToZeroMinutes
+            : null,
       })
       .where("id", "=", deploymentId)
       .execute();

@@ -5,7 +5,12 @@ import type {
 } from "@/lib/service-runtime-status";
 import { cn } from "@/lib/utils";
 
-type ServiceIndicatorTone = "neutral" | "info" | "success" | "danger";
+type ServiceIndicatorTone =
+  | "neutral"
+  | "info"
+  | "success"
+  | "sleeping"
+  | "danger";
 
 interface ServiceIndicatorConfig {
   tone: ServiceIndicatorTone;
@@ -17,6 +22,7 @@ const toneClassName: Record<ServiceIndicatorTone, string> = {
   neutral: "bg-neutral-500",
   info: "bg-blue-500",
   success: "bg-green-500",
+  sleeping: "bg-violet-400",
   danger: "bg-red-500",
 };
 
@@ -34,6 +40,11 @@ const runtimeConfig: Record<ServiceRuntimeStatus, ServiceIndicatorConfig> = {
   online: {
     tone: "success",
     label: "online",
+    pulse: false,
+  },
+  sleeping: {
+    tone: "sleeping",
+    label: "sleeping",
     pulse: false,
   },
   offline: {

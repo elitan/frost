@@ -131,6 +131,7 @@ function makeService(overrides: Record<string, unknown> = {}) {
     shutdownTimeout: null as number | null,
     drainTimeout: null as number | null,
     replicaCount: 1,
+    scaleToZeroMinutes: null as number | null,
     ...overrides,
   };
 }
@@ -198,5 +199,47 @@ describe("mergeConfigWithService replicas with volumes", () => {
     const service = { ...makeService({ replicaCount: 1 }), volumes: "[]" };
     const result = mergeConfigWithService(service, { deploy: { replicas: 2 } });
     expect(result.replicaCount).toBe(2);
+  });
+});
+
+describe("scale_to_zero_minutes", () => {
+  test("parses minutes and false", () => {
+    expect(
+      parseFrostConfig("deploy:\n  scale_to_zero_minutes: 15\n").deploy
+        ?.scale_to_zero_minutes,
+    ).toBe(15);
+    expect(
+      parseFrostConfig("deploy:\n  scale_to_zero_minutes: false\n").deploy
+        ?.scale_to_zero_minutes,
+    ).toBe(false);
+  });
+
+  test("rejects out-of-range and fractional values", () => {
+    expect(() =>
+      parseFrostConfig("deploy:\n  scale_to_zero_minutes: 0\n"),
+    ).toThrow();
+    expect(() =>
+      parseFrostConfig("deploy:\n  scale_to_zero_minutes: 1.5\n"),
+    ).toThrow();
+    expect(() =>
+      parseFrostConfig("deploy:\n  scale_to_zero_minutes: true\n"),
+    ).toThrow();
+  });
+
+  test("merge: config overrides, false disables, unset keeps service value", () => {
+    const service = makeService({ scaleToZeroMinutes: 30 });
+    expect(
+      mergeConfigWithService(service, {
+        deploy: { scale_to_zero_minutes: 5 },
+      }).scaleToZeroMinutes,
+    ).toBe(5);
+    expect(
+      mergeConfigWithService(service, {
+        deploy: { scale_to_zero_minutes: false },
+      }).scaleToZeroMinutes,
+    ).toBeNull();
+    expect(
+      mergeConfigWithService(service, { deploy: {} }).scaleToZeroMinutes,
+    ).toBe(30);
   });
 });

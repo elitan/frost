@@ -86,7 +86,13 @@ select_from_file() {
 
   case "$file" in
     apps/app/src/lib/deployer.ts|apps/app/src/lib/docker.ts|apps/app/src/server/services.ts|apps/app/src/server/deployments.ts|apps/app/src/server/projects.ts|apps/app/src/server/environments.ts|apps/app/src/lib/paths.ts|apps/app/scripts/e2e/common.sh|apps/app/scripts/e2e-test.sh|apps/app/scripts/e2e-local*.sh)
-      add_groups_csv "03-envvars,04-update,07-database,08-rollback,09-healthcheck,10-race,11-frost-env,12-limits,14-volumes,16-concurrent,18-build-context,19-templates,21-hostname,25-graceful-shutdown,26-replicas,27-replica-logs" "deployer-core:$file"
+      add_groups_csv "03-envvars,04-update,07-database,08-rollback,09-healthcheck,10-race,11-frost-env,12-limits,14-volumes,16-concurrent,18-build-context,19-templates,21-hostname,25-graceful-shutdown,26-replicas,27-replica-logs,32-scale-to-zero" "deployer-core:$file"
+      ;;
+  esac
+
+  case "$file" in
+    apps/app/src/lib/service-scale-to-zero.ts|apps/app/src/lib/service-wake-server.ts|apps/app/src/lib/container-network-stats.ts|apps/app/src/lib/scale-to-zero-config.ts|apps/app/src/lib/deployment-runtime.ts|apps/app/src/lib/cleanup.ts|apps/app/src/lib/domains.ts)
+      add_groups_csv "32-scale-to-zero" "scale-to-zero:$file"
       ;;
   esac
 

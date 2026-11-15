@@ -2,6 +2,10 @@ import { oc } from "@orpc/contract";
 import { z } from "zod";
 import { deploymentsSchema, servicesSchema } from "@/lib/db-schemas";
 import {
+  SCALE_TO_ZERO_MAX_MINUTES,
+  SCALE_TO_ZERO_MIN_MINUTES,
+} from "@/lib/scale-to-zero-config";
+import {
   envVarSchema,
   serviceWithDeploymentSchema,
   volumeConfigSchema,
@@ -88,6 +92,13 @@ export const servicesContract = {
         shutdownTimeout: z.number().min(1).max(300).nullable().optional(),
         drainTimeout: z.number().min(0).max(300).nullable().optional(),
         requestTimeout: z.number().min(1).max(3600).nullable().optional(),
+        scaleToZeroMinutes: z
+          .number()
+          .int()
+          .min(SCALE_TO_ZERO_MIN_MINUTES)
+          .max(SCALE_TO_ZERO_MAX_MINUTES)
+          .nullable()
+          .optional(),
         volumes: z.array(volumeConfigSchema).optional(),
         registryId: z.string().nullable().optional(),
         command: z.string().nullable().optional(),
@@ -106,6 +117,16 @@ export const servicesContract = {
     .route({ method: "POST", path: "/services/{serviceId}/deploy" })
     .input(z.object({ serviceId: z.string() }))
     .output(z.object({ deploymentId: z.string() })),
+
+  wake: oc
+    .route({ method: "POST", path: "/services/{serviceId}/wake" })
+    .input(z.object({ serviceId: z.string() }))
+    .output(z.object({ success: z.boolean() })),
+
+  sleep: oc
+    .route({ method: "POST", path: "/services/{serviceId}/sleep" })
+    .input(z.object({ serviceId: z.string() }))
+    .output(z.object({ success: z.boolean() })),
 
   listDeployments: oc
     .route({ method: "GET", path: "/services/{serviceId}/deployments" })

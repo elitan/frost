@@ -70,6 +70,37 @@ describe("createService", () => {
     }
   });
 
+  test("turns scale to zero on by default for apps only", async () => {
+    const app = await createService({
+      environmentId: TEST_ENV_ID,
+      name: "stz-default",
+      hostname: "stz-default",
+      deployType: "image",
+      imageUrl: "nginx:alpine",
+    });
+    expect(app.scaleToZeroMinutes).toBe(15);
+
+    const alwaysOn = await createService({
+      environmentId: TEST_ENV_ID,
+      name: "stz-always-on",
+      hostname: "stz-always-on",
+      deployType: "image",
+      imageUrl: "nginx:alpine",
+      scaleToZeroMinutes: null,
+    });
+    expect(alwaysOn.scaleToZeroMinutes).toBeNull();
+
+    const database = await createService({
+      environmentId: TEST_ENV_ID,
+      name: "stz-db",
+      hostname: "stz-db",
+      deployType: "image",
+      serviceType: "database",
+      imageUrl: "postgres:17",
+    });
+    expect(database.scaleToZeroMinutes).toBeNull();
+  });
+
   test("creates service with basic fields", async () => {
     const service = await createService({
       environmentId: TEST_ENV_ID,

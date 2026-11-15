@@ -697,6 +697,19 @@ export async function gracefulStopContainer(
   }
 }
 
+/**
+ * Stops a container but keeps it (unlike gracefulStopContainer), so it can
+ * be started again with startContainer. Used to put services to sleep.
+ */
+export async function stopContainerKeepingIt(
+  name: string,
+  timeoutSeconds: number = 30,
+): Promise<void> {
+  await execAsync(
+    `docker stop --time ${Number(timeoutSeconds)} ${shellEscape(name)}`,
+  );
+}
+
 export async function startContainer(name: string): Promise<void> {
   await execAsync(`docker start ${shellEscape(name)}`);
 }
@@ -1187,20 +1200,44 @@ export async function isNetworkInUse(name: string): Promise<boolean> {
       `docker network inspect ${shellEscape(name)} --format '{{json .Containers}}'`,
     );
     const containers = JSON.parse(stdout.trim());
-    return Object.keys(containers).length > 0;
+    if (Object.keys(containers).length > 0) {
+      return true;
+    }
+    // `.Containers` only lists running containers. Stopped ones (e.g. a
+    // sleeping scale-to-zero service) still need the network to start again.
+    const { stdout: attached } = await execAsync(
+      `docker ps -aq --filter ${shellEscape(`network=${name}`)}`,
+    );
+    return attached.trim().length > 0;
   } catch {
     return false;
   }
 }
 
-export async function pruneStoppedContainers(): Promise<number> {
+/**
+ * Removes exited Frost containers. `keepContainerIds` (full or short ids)
+ * are skipped: sleeping scale-to-zero services are stopped on purpose and
+ * must survive so they can be started again.
+ */
+export async function pruneStoppedContainers(
+  keepContainerIds: Iterable<string> = [],
+): Promise<number> {
+  const keep = [...keepContainerIds];
   try {
     const { stdout } = await execAsync(
-      `docker ps -a --filter "status=exited" --filter "label=frost.managed=true" --format '{{.Names}}'`,
+      `docker ps -a --no-trunc --filter "status=exited" --filter "label=frost.managed=true" --format '{{.ID}}'`,
     );
-    const containers = stdout.trim().split("\n").filter(Boolean);
-    for (const name of containers) {
-      await execAsync(`docker rm ${shellEscape(name)}`).catch(() => {});
+    const containers = stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .filter(function isNotKept(id) {
+        return !keep.some(function matches(keepId) {
+          return id.startsWith(keepId) || keepId.startsWith(id);
+        });
+      });
+    for (const id of containers) {
+      await execAsync(`docker rm ${shellEscape(id)}`).catch(() => {});
     }
     return containers.length;
   } catch {

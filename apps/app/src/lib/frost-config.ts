@@ -4,6 +4,10 @@ import type { Selectable } from "kysely";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { Services } from "./db-types";
+import {
+  SCALE_TO_ZERO_MAX_MINUTES,
+  SCALE_TO_ZERO_MIN_MINUTES,
+} from "./scale-to-zero-config";
 
 export const frostConfigSchema = z
   .object({
@@ -29,6 +33,17 @@ export const frostConfigSchema = z
         drain_timeout: z.number().min(0).max(300).optional(),
         shutdown_timeout: z.number().min(1).max(300).optional(),
         replicas: z.number().min(1).max(10).optional(),
+        // Minutes without traffic before the service sleeps; false disables.
+        scale_to_zero_minutes: z
+          .union([
+            z
+              .number()
+              .int()
+              .min(SCALE_TO_ZERO_MIN_MINUTES)
+              .max(SCALE_TO_ZERO_MAX_MINUTES),
+            z.literal(false),
+          ])
+          .optional(),
       })
       .optional(),
   })
@@ -120,6 +135,7 @@ type EffectiveService = Pick<
   | "drainTimeout"
   | "shutdownTimeout"
   | "replicaCount"
+  | "scaleToZeroMinutes"
 >;
 
 function hasVolumes(volumes: string | null | undefined): boolean {
@@ -130,6 +146,15 @@ function hasVolumes(volumes: string | null | undefined): boolean {
   } catch {
     return volumes !== "[]";
   }
+}
+
+function resolveScaleToZeroMinutes(
+  configValue: number | false | undefined,
+  serviceValue: number | null,
+): number | null {
+  if (configValue === undefined) return serviceValue;
+  if (configValue === false) return null;
+  return configValue;
 }
 
 export function mergeConfigWithService<
@@ -147,6 +172,10 @@ export function mergeConfigWithService<
     drainTimeout: config.deploy?.drain_timeout ?? service.drainTimeout,
     shutdownTimeout: config.deploy?.shutdown_timeout ?? service.shutdownTimeout,
     replicaCount: config.deploy?.replicas ?? service.replicaCount,
+    scaleToZeroMinutes: resolveScaleToZeroMinutes(
+      config.deploy?.scale_to_zero_minutes,
+      service.scaleToZeroMinutes,
+    ),
   };
 
   if ((merged.replicaCount ?? 1) > 1 && hasVolumes(service.volumes)) {

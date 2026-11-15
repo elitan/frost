@@ -16,7 +16,10 @@ import {
   stopContainer as stopContainerDefault,
   stopContainersByLabel as stopContainersByLabelDefault,
 } from "./docker";
-import { getServiceRuntimeState } from "./service-runtime-status";
+import {
+  getServiceRuntimeState,
+  type ServiceRuntimeStatus,
+} from "./service-runtime-status";
 
 const LIVE_CONTAINER_STATUSES = new Set(["running", "restarting", "paused"]);
 const RECONCILE_INTERVAL_MS = 15_000;
@@ -222,7 +225,7 @@ export async function addLatestDeploymentWithRuntimeStatus<
 ): Promise<
   T & {
     latestDeployment: Selectable<Deployments> | null;
-    runtimeStatus: "not-deployed" | "starting" | "online" | "offline";
+    runtimeStatus: ServiceRuntimeStatus;
     attentionStatus: "updating" | "last-deploy-failed" | null;
   }
 > {
@@ -235,6 +238,7 @@ export async function addLatestDeploymentWithRuntimeStatus<
   const serviceRuntime = getServiceRuntimeState({
     currentDeploymentId,
     latestDeployment,
+    sleeping: service.sleepingSince !== null,
   });
 
   return {
@@ -254,7 +258,7 @@ export async function addLatestDeploymentsWithRuntimeStatus<
   Array<
     T & {
       latestDeployment: Selectable<Deployments> | null;
-      runtimeStatus: "not-deployed" | "starting" | "online" | "offline";
+      runtimeStatus: ServiceRuntimeStatus;
       attentionStatus: "updating" | "last-deploy-failed" | null;
     }
   >
@@ -293,9 +297,23 @@ export async function failStaleInProgressDeployments(): Promise<number> {
 export async function reconcileRunningDeployments(): Promise<number> {
   const deployments = await db
     .selectFrom("deployments")
-    .select(["id", "serviceId", "containerId", "finishedAt"])
-    .where("status", "=", "running")
-    .where("containerId", "is not", null)
+    .leftJoin("services", "services.id", "deployments.serviceId")
+    .select([
+      "deployments.id",
+      "deployments.serviceId",
+      "deployments.containerId",
+      "deployments.finishedAt",
+    ])
+    .where("deployments.status", "=", "running")
+    .where("deployments.containerId", "is not", null)
+    // A sleeping (scale-to-zero) service's containers are stopped on purpose.
+    .where(function notSleeping(eb) {
+      return eb.or([
+        eb("services.sleepingSince", "is", null),
+        eb("services.currentDeploymentId", "is", null),
+        eb("services.currentDeploymentId", "!=", eb.ref("deployments.id")),
+      ]);
+    })
     .execute();
 
   if (deployments.length === 0) {

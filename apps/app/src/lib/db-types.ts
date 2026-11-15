@@ -157,6 +157,7 @@ export interface Deployments {
   trigger: Generated<string | null>;
   triggeredByUsername: string | null;
   triggeredByAvatarUrl: string | null;
+  scaleToZeroMinutes: number | null;
 }
 
 export interface Domains {
@@ -323,6 +324,9 @@ export interface Services {
   frostFilePath: Generated<string | null>;
   replicaCount: Generated<number>;
   createdAt: number;
+  scaleToZeroMinutes: Generated<number | null>;
+  lastActivityAt: number | null;
+  sleepingSince: number | null;
 }
 
 export interface Settings {

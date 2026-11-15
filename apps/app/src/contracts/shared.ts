@@ -29,6 +29,7 @@ export const serviceRuntimeStatusSchema = z.enum([
   "not-deployed",
   "starting",
   "online",
+  "sleeping",
   "offline",
 ]);
 

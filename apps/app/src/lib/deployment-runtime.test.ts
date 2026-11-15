@@ -414,6 +414,67 @@ describe("deployment reconciliation", function describeRuntimeStatus() {
     }
   });
 
+  test("leaves a sleeping service's stopped deployment running", async function testSleepingService() {
+    const fixture = await createFixture();
+    const suffix = nanoid(8);
+    const sleepingId = `dep-sleeping-${suffix}`;
+    const sleepingContainer = `sleeping${suffix}`.padEnd(64, "f");
+
+    try {
+      const now = Date.now();
+      await db
+        .insertInto("deployments")
+        .values({
+          id: sleepingId,
+          serviceId: fixture.serviceId,
+          environmentId: fixture.environmentId,
+          commitSha: "HEAD",
+          status: "running",
+          containerId: sleepingContainer,
+          createdAt: now,
+          finishedAt: now,
+        })
+        .execute();
+      await db
+        .updateTable("services")
+        .set({ currentDeploymentId: sleepingId, sleepingSince: now })
+        .where("id", "=", fixture.serviceId)
+        .execute();
+
+      setDeploymentRuntimeDockerForTests({
+        listManagedContainerStates: async function listStates() {
+          return new Map([[sleepingContainer, "exited"]]);
+        },
+      });
+
+      await reconcileRunningDeployments();
+
+      const deployment = await db
+        .selectFrom("deployments")
+        .select("status")
+        .where("id", "=", sleepingId)
+        .executeTakeFirst();
+      expect(deployment?.status).toBe("running");
+
+      // Once awake again, a dead container is reconciled as usual.
+      await db
+        .updateTable("services")
+        .set({ sleepingSince: null })
+        .where("id", "=", fixture.serviceId)
+        .execute();
+      await reconcileRunningDeployments();
+      const after = await db
+        .selectFrom("deployments")
+        .select("status")
+        .where("id", "=", sleepingId)
+        .executeTakeFirst();
+      expect(after?.status).toBe("stopped");
+    } finally {
+      resetDeploymentRuntimeDockerForTests();
+      await cleanupFixture(fixture);
+    }
+  });
+
   test("skips running reconciliation when docker is unavailable", async function testDockerUnavailable() {
     const fixture = await createFixture();
 

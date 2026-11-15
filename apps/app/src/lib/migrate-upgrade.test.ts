@@ -136,6 +136,45 @@ describe("migrate integration", () => {
     expect(deployment.service_id).toBe("legacy-postgres");
   });
 
+  test("scale-to-zero migration enables existing apps but not databases", () => {
+    const partialSchemaDir = join(TEST_DIR, "schema-before-027");
+    mkdirSync(partialSchemaDir, { recursive: true });
+    for (const file of readdirSync(PROD_SCHEMA_DIR)) {
+      if (file.endsWith(".sql") && file < "027") {
+        writeFileSync(
+          join(partialSchemaDir, file),
+          readFileSync(join(PROD_SCHEMA_DIR, file)),
+        );
+      }
+    }
+    runMigrations({ dbPath: TEST_DB, schemaDir: partialSchemaDir });
+
+    const before = new Database(TEST_DB);
+    before.exec(`
+      INSERT INTO projects (id, name, env_vars, created_at) VALUES ('p1', 'p1', '[]', 1);
+      INSERT INTO environments (id, project_id, name, type, is_ephemeral, created_at)
+        VALUES ('e1', 'p1', 'production', 'production', 0, 1);
+      INSERT INTO services (id, environment_id, name, deploy_type, service_type, env_vars, created_at)
+        VALUES ('s-app', 'e1', 'app', 'image', 'app', '[]', 1),
+               ('s-db', 'e1', 'db', 'image', 'database', '[]', 1);
+    `);
+    before.close();
+
+    runMigrations({ dbPath: TEST_DB, schemaDir: PROD_SCHEMA_DIR });
+
+    const after = new Database(TEST_DB);
+    const rows = after
+      .prepare(
+        "SELECT id, scale_to_zero_minutes AS minutes FROM services ORDER BY id",
+      )
+      .all() as Array<{ id: string; minutes: number | null }>;
+    after.close();
+    expect(rows).toEqual([
+      { id: "s-app", minutes: 15 },
+      { id: "s-db", minutes: null },
+    ]);
+  });
+
   test("all expected tables exist after migrations", () => {
     runMigrations({ dbPath: TEST_DB, schemaDir: PROD_SCHEMA_DIR });
 
