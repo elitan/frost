@@ -320,6 +320,22 @@ export async function sleepService(
   });
 }
 
+/**
+ * After a failed wake, stop whatever did start so the service is fully
+ * asleep again. Nothing else would stop it: the scheduler and reconciler
+ * both skip sleeping services.
+ */
+async function stopAfterFailedWake(service: ScaleToZeroService): Promise<void> {
+  const timeout = service.shutdownTimeout ?? DEFAULT_SHUTDOWN_TIMEOUT_SECONDS;
+  for (const container of service.containers) {
+    try {
+      await deps.stopContainer(container.containerId, timeout);
+    } catch {
+      // Already stopped or gone.
+    }
+  }
+}
+
 async function wakeServiceLocked(serviceId: string): Promise<number[]> {
   const service = await getScaleToZeroService(serviceId);
   if (!service || service.containers.length === 0) {
@@ -350,6 +366,8 @@ async function wakeServiceLocked(serviceId: string): Promise<number[]> {
         .set({ sleepingSince: null })
         .where("id", "=", serviceId)
         .execute();
+    } else {
+      await stopAfterFailedWake(service);
     }
     throw new ServiceWakeError(`Failed to start service: ${message}`);
   }
@@ -367,6 +385,7 @@ async function wakeServiceLocked(serviceId: string): Promise<number[]> {
     }),
   );
   if (healthy.includes(false)) {
+    await stopAfterFailedWake(service);
     throw new ServiceWakeError("Service failed its health check after waking");
   }
 

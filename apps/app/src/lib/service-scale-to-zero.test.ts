@@ -378,10 +378,15 @@ describe("scale-to-zero lifecycle", () => {
     await sleepService(f.serviceId, { force: true });
 
     fake.healthy = false;
+    fake.stopped = [];
     await expect(ensureServiceAwake(f.serviceId)).rejects.toBeInstanceOf(
       ServiceWakeError,
     );
     expect((await getService(f.serviceId)).sleepingSince).toBe(now);
+    // Containers that started are stopped again, not left running.
+    expect(fake.stopped.map((s) => s.containerId)).toEqual(
+      f.containers.map((c) => c.containerId),
+    );
 
     fake.healthy = true;
     await ensureServiceAwake(f.serviceId);
