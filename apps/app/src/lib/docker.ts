@@ -1211,24 +1211,31 @@ export async function pruneStoppedContainers(): Promise<number> {
 export async function pruneBuildCache(): Promise<{ bytes: number }> {
   try {
     const { stdout } = await execAsync(
-      `docker builder prune -f --keep-storage 10GB`,
+      // Drop build cache not used in the last 24h (recent builds stay fast).
+      `docker builder prune -f --filter until=24h`,
     );
-    const match = stdout.match(
-      /Total reclaimed space:\s*([\d.]+)\s*(B|KB|MB|GB)/i,
-    );
-    if (!match) {
-      return { bytes: 0 };
-    }
-    const value = parseFloat(match[1]);
-    const unit = match[2].toUpperCase();
-    const multipliers: Record<string, number> = {
-      B: 1,
-      KB: 1024,
-      MB: 1024 * 1024,
-      GB: 1024 * 1024 * 1024,
-    };
-    return { bytes: Math.round(value * (multipliers[unit] || 1)) };
+    return { bytes: parseBuildCachePruneBytes(stdout) };
   } catch {
     return { bytes: 0 };
   }
+}
+
+/**
+ * Parses `docker builder prune` output. Older Docker prints
+ * "Total reclaimed space: 1.2GB", newer versions print "Total:  1.2GB".
+ */
+export function parseBuildCachePruneBytes(stdout: string): number {
+  const match = stdout.match(
+    /Total(?: reclaimed space)?:\s*([\d.]+)\s*(B|kB|KB|MB|GB|TB)\b/i,
+  );
+  if (!match) return 0;
+  const value = Number.parseFloat(match[1]);
+  const multipliers: Record<string, number> = {
+    B: 1,
+    KB: 1024,
+    MB: 1024 ** 2,
+    GB: 1024 ** 3,
+    TB: 1024 ** 4,
+  };
+  return Math.round(value * (multipliers[match[2].toUpperCase()] ?? 1));
 }

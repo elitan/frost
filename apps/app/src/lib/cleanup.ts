@@ -106,6 +106,23 @@ export function isCleanupLockStale(
   return now.getTime() - startedAtMs >= CLEANUP_LOCK_TIMEOUT_MS;
 }
 
+/**
+ * Cleanup runs inside the Frost process, so a lock that says "running" at
+ * startup was left by a crash or restart. Clear it instead of waiting for the
+ * stale-lock timeout.
+ */
+export async function resetInterruptedCleanup(
+  database: Kysely<DB> = db,
+): Promise<boolean> {
+  const result = await database
+    .updateTable("settings")
+    .set({ value: "false" })
+    .where("key", "=", "cleanup_running")
+    .where("value", "=", "true")
+    .executeTakeFirst();
+  return Number(result.numUpdatedRows ?? 0) > 0;
+}
+
 export async function claimCleanupJob(
   database: Kysely<DB> = db,
   now: Date = new Date(),

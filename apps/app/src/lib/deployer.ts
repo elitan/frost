@@ -1933,7 +1933,13 @@ async function logPostSwitchWarning(
   } catch {}
 }
 
-async function updateRollbackEligible(serviceId: string): Promise<void> {
+/**
+ * Only the latest ROLLBACK_ELIGIBLE_COUNT successful deployments (running, or
+ * stopped after being replaced) keep their image as a rollback target; every
+ * other deployment of the service is cleared. Cleanup never deletes images of
+ * eligible deployments, so stale flags would keep old images forever.
+ */
+export async function updateRollbackEligible(serviceId: string): Promise<void> {
   const service = await db
     .selectFrom("services")
     .select("volumes")
@@ -1941,41 +1947,40 @@ async function updateRollbackEligible(serviceId: string): Promise<void> {
     .executeTakeFirst();
 
   const hasVolumes = service?.volumes && service.volumes !== "[]";
-  if (hasVolumes) {
-    return;
-  }
 
-  const successfulDeployments = await db
-    .selectFrom("deployments")
-    .select("id")
-    .where("serviceId", "=", serviceId)
-    .where("status", "=", "running")
-    .where("imageName", "is not", null)
-    .orderBy("createdAt", "desc")
-    .execute();
+  const eligibleIds = hasVolumes
+    ? []
+    : (
+        await db
+          .selectFrom("deployments")
+          .select("id")
+          .where("serviceId", "=", serviceId)
+          .where("status", "in", ["running", "stopped"])
+          .where("imageName", "is not", null)
+          .orderBy("createdAt", "desc")
+          .limit(ROLLBACK_ELIGIBLE_COUNT)
+          .execute()
+      ).map((d) => d.id);
 
-  const eligibleIds = successfulDeployments
-    .slice(0, ROLLBACK_ELIGIBLE_COUNT)
-    .map((d) => d.id);
-  const ineligibleIds = successfulDeployments
-    .slice(ROLLBACK_ELIGIBLE_COUNT)
-    .map((d) => d.id);
-
-  if (eligibleIds.length > 0) {
-    await db
-      .updateTable("deployments")
-      .set({ rollbackEligible: true })
-      .where("id", "in", eligibleIds)
-      .execute();
-  }
-
-  if (ineligibleIds.length > 0) {
-    await db
+  await db.transaction().execute(async (trx) => {
+    let clear = trx
       .updateTable("deployments")
       .set({ rollbackEligible: false })
-      .where("id", "in", ineligibleIds)
-      .execute();
-  }
+      .where("serviceId", "=", serviceId)
+      .where("rollbackEligible", "=", true);
+    if (eligibleIds.length > 0) {
+      clear = clear.where("id", "not in", eligibleIds);
+    }
+    await clear.execute();
+
+    if (eligibleIds.length > 0) {
+      await trx
+        .updateTable("deployments")
+        .set({ rollbackEligible: true })
+        .where("id", "in", eligibleIds)
+        .execute();
+    }
+  });
 }
 
 export async function rollbackDeployment(

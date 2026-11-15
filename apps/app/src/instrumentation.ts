@@ -52,6 +52,17 @@ export async function register() {
       console.error("[startup] database imports: recovery failed", err);
     }
 
+    const { resetInterruptedCleanup } = await import("./lib/cleanup");
+    try {
+      if (await resetInterruptedCleanup()) {
+        console.log(
+          "[startup] cleanup: cleared lock left by an interrupted run",
+        );
+      }
+    } catch (err) {
+      console.error("[startup] cleanup: failed to reset lock", err);
+    }
+
     const { startMetricsCollector } = await import("./lib/metrics-collector");
     startMetricsCollector();
     console.log("[startup] metrics collector: started");
