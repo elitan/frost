@@ -103,9 +103,20 @@ export async function register() {
       console.error("[startup] service wake server: failed to start", err);
     }
 
-    const { startScaleToZeroScheduler } = await import(
+    const { startScaleToZeroScheduler, ensureServiceAwake } = await import(
       "./lib/service-scale-to-zero"
     );
+    const { startActivatorControlServer } = await import(
+      "./lib/service-activator"
+    );
+    try {
+      const activatorPort = await startActivatorControlServer({
+        ensureServiceAwake,
+      });
+      console.log(`[startup] activator control: listening on ${activatorPort}`);
+    } catch (err) {
+      console.error("[startup] activator control: failed to start", err);
+    }
     startScaleToZeroScheduler();
     console.log("[startup] scale-to-zero scheduler: started");
 

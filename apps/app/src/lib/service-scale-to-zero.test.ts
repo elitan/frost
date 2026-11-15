@@ -152,6 +152,7 @@ interface FakeDocker {
   bytes: Map<string, number>;
   healthy: boolean;
   syncError: Error | null;
+  activators: string[];
 }
 
 function installFakes(now: () => number): FakeDocker {
@@ -162,6 +163,7 @@ function installFakes(now: () => number): FakeDocker {
     bytes: new Map(),
     healthy: true,
     syncError: null,
+    activators: [],
   };
   setScaleToZeroDepsForTests({
     getNow: now,
@@ -179,6 +181,10 @@ function installFakes(now: () => number): FakeDocker {
       if (fake.syncError) throw fake.syncError;
       return { synced: true };
     },
+    startActivator: async (serviceId) => {
+      fake.activators.push(serviceId);
+    },
+    reconcileActivators: async () => {},
   });
   return fake;
 }
@@ -275,6 +281,7 @@ describe("scale-to-zero lifecycle", () => {
     expect(await listSleepingContainerIds()).toEqual(
       expect.arrayContaining(f.containers.map((c) => c.containerId)),
     );
+    expect(fake.activators).toEqual([f.serviceId]);
 
     // Three requests arrive while asleep: one wake, all get the ports.
     const results = await Promise.all([

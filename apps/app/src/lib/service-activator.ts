@@ -1,0 +1,338 @@
+import { exec } from "node:child_process";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import { isIP } from "node:net";
+import { promisify } from "node:util";
+import { db } from "./db";
+import { getRequiredJwtSecret } from "./jwt-secret";
+import { shellEscape } from "./shell-escape";
+import { slugify } from "./slugify";
+
+/**
+ * EXPERIMENT: internal wake for scale-to-zero.
+ *
+ * Containers reach each other by `<hostname>.frost.internal` on their Docker
+ * network, which never passes through Caddy. While a service sleeps, Frost
+ * runs a tiny stand-in (apps/activator, ~2 MB idle) under that name and port.
+ * The first connection makes it call POST /activate/<serviceId> here; Frost
+ * wakes the service and answers with the containers' IPs; the stand-in
+ * forwards held connections, then exits on its own.
+ */
+
+const execAsync = promisify(exec);
+
+const ACTIVATOR_LABEL = "frost.activator";
+const DEFAULT_CONTROL_PORT = 3091;
+
+export function getActivatorImage(): string {
+  return process.env.FROST_ACTIVATOR_IMAGE || "frost-activator:dev";
+}
+
+export function getActivatorControlPort(): number {
+  const port = Number.parseInt(process.env.FROST_ACTIVATOR_PORT ?? "", 10);
+  return Number.isInteger(port) && port > 0 && port < 65536
+    ? port
+    : DEFAULT_CONTROL_PORT;
+}
+
+export function activatorContainerName(serviceId: string): string {
+  return `frost-activator-${serviceId}`.replace(/[^a-zA-Z0-9_.-]/g, "-");
+}
+
+/** Per-service token, so a stand-in can only wake its own service. */
+export function activatorToken(serviceId: string): string {
+  return createHmac("sha256", getRequiredJwtSecret())
+    .update(`activator:${serviceId}`)
+    .digest("hex");
+}
+
+export function isValidActivatorToken(
+  serviceId: string,
+  token: string,
+): boolean {
+  const expected = Buffer.from(activatorToken(serviceId));
+  const given = Buffer.from(token);
+  return expected.length === given.length && timingSafeEqual(expected, given);
+}
+
+/** Loopback, RFC 1918 and unique-local addresses: where containers come from. */
+export function isPrivateAddress(address: string): boolean {
+  const ip = address.startsWith("::ffff:") ? address.slice(7) : address;
+  if (isIP(ip) === 4) {
+    const [a, b] = ip.split(".").map(Number);
+    return (
+      a === 127 ||
+      a === 10 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
+  }
+  return ip === "::1" || /^f[cd]/i.test(ip);
+}
+
+interface ActivatorTarget {
+  serviceId: string;
+  hostname: string;
+  containerPort: number;
+  containerIds: string[];
+}
+
+async function getActivatorTarget(
+  serviceId: string,
+): Promise<ActivatorTarget | null> {
+  const row = await db
+    .selectFrom("services")
+    .innerJoin("deployments", "deployments.id", "services.currentDeploymentId")
+    .select([
+      "services.id",
+      "services.name",
+      "services.hostname",
+      "deployments.id as deploymentId",
+      "deployments.containerId",
+      "deployments.containerPort",
+    ])
+    .where("services.id", "=", serviceId)
+    .executeTakeFirst();
+  if (!row) return null;
+  const replicas = await db
+    .selectFrom("replicas")
+    .select("containerId")
+    .where("deploymentId", "=", row.deploymentId)
+    .where("status", "=", "running")
+    .execute();
+  const containerIds = replicas.flatMap((r) =>
+    r.containerId ? [r.containerId] : [],
+  );
+  if (containerIds.length === 0 && row.containerId) {
+    containerIds.push(row.containerId);
+  }
+  return {
+    serviceId: row.id,
+    hostname: row.hostname ?? slugify(row.name),
+    containerPort: row.containerPort ?? 8080,
+    containerIds,
+  };
+}
+
+/** The Frost network a (possibly stopped) container is attached to. */
+async function getContainerNetwork(containerId: string): Promise<string> {
+  const { stdout } = await execAsync(
+    `docker inspect --format '{{json .NetworkSettings.Networks}}' ${shellEscape(containerId)}`,
+  );
+  const networks = Object.keys(JSON.parse(stdout.trim()) as object);
+  const network = networks.find((n) => n.startsWith("frost-net-"));
+  if (!network) {
+    throw new Error(`Container ${containerId} is not on a Frost network`);
+  }
+  return network;
+}
+
+async function getContainerIp(
+  containerId: string,
+  network: string,
+): Promise<string> {
+  const { stdout } = await execAsync(
+    `docker inspect --format ${shellEscape(`{{(index .NetworkSettings.Networks "${network}").IPAddress}}`)} ${shellEscape(containerId)}`,
+  );
+  const ip = stdout.trim();
+  if (!isIP(ip)) {
+    throw new Error(`Container ${containerId} has no IP on ${network}`);
+  }
+  return ip;
+}
+
+export async function stopServiceActivator(serviceId: string): Promise<void> {
+  await execAsync(
+    `docker rm -f ${shellEscape(activatorContainerName(serviceId))}`,
+  ).catch(() => {});
+}
+
+/**
+ * Starts the stand-in for a sleeping service. Best effort: if it fails, the
+ * service still sleeps and still wakes through its domains.
+ */
+export async function startServiceActivator(serviceId: string): Promise<void> {
+  const target = await getActivatorTarget(serviceId);
+  const firstContainer = target?.containerIds[0];
+  if (!target || !firstContainer) return;
+  const network = await getContainerNetwork(firstContainer);
+  await stopServiceActivator(serviceId);
+  const args = [
+    "run",
+    "-d",
+    "--rm",
+    "--name",
+    activatorContainerName(serviceId),
+    "--network",
+    network,
+    "--network-alias",
+    `${target.hostname}.frost.internal`,
+    "--add-host",
+    "host.docker.internal:host-gateway",
+    "--label",
+    `${ACTIVATOR_LABEL}=true`,
+    // Removed with the service by cleanupService (stopContainersByLabel).
+    "--label",
+    `frost.service.id=${serviceId}`,
+    "--memory",
+    "64m",
+    "--pids-limit",
+    "2100",
+    "--read-only",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+    "-e",
+    `ACTIVATOR_PORTS=${target.containerPort}`,
+    "-e",
+    `ACTIVATOR_WAKE_URL=http://host.docker.internal:${getActivatorControlPort()}/activate/${serviceId}`,
+    "-e",
+    `ACTIVATOR_TOKEN=${activatorToken(serviceId)}`,
+    getActivatorImage(),
+  ];
+  await execAsync(`docker ${args.map(shellEscape).join(" ")}`);
+}
+
+async function getActivatorState(serviceId: string): Promise<string | null> {
+  try {
+    const { stdout } = await execAsync(
+      `docker inspect --format '{{.State.Status}}' ${shellEscape(activatorContainerName(serviceId))}`,
+    );
+    return stdout.trim();
+  } catch {
+    return null;
+  }
+}
+
+const PRESENT_STATES = new Set(["created", "running", "restarting"]);
+
+async function isServiceSleeping(serviceId: string): Promise<boolean> {
+  const row = await db
+    .selectFrom("services")
+    .select("sleepingSince")
+    .where("id", "=", serviceId)
+    .executeTakeFirst();
+  return row !== undefined && row.sleepingSince !== null;
+}
+
+/**
+ * Makes the stand-ins match the sleeping services: starts missing ones (e.g.
+ * after a host reboot; they run with --rm) and removes exited leftovers.
+ * Each service is handled under `withServiceLock`, the lock sleep and wake
+ * use, so this never replaces a stand-in that is being started or used.
+ */
+export async function reconcileServiceActivators(
+  withServiceLock: <T>(serviceId: string, task: () => Promise<T>) => Promise<T>,
+): Promise<void> {
+  const sleeping = await db
+    .selectFrom("services")
+    .select("id")
+    .where("sleepingSince", "is not", null)
+    .where("serviceType", "=", "app")
+    .execute();
+  const { stdout } = await execAsync(
+    `docker ps -a --filter label=${ACTIVATOR_LABEL}=true --format ${shellEscape('{{.Label "frost.service.id"}}')}`,
+  );
+  const candidates = new Set(sleeping.map((s) => s.id));
+  for (const line of stdout.trim().split("\n")) {
+    if (line) candidates.add(line);
+  }
+
+  for (const serviceId of candidates) {
+    await withServiceLock(serviceId, async () => {
+      const state = await getActivatorState(serviceId);
+      const present = state !== null && PRESENT_STATES.has(state);
+      if (await isServiceSleeping(serviceId)) {
+        if (!present) await startServiceActivator(serviceId);
+      } else if (state !== null && !present) {
+        // An awake service's running stand-in exits on its own; only
+        // exited leftovers are removed.
+        await stopServiceActivator(serviceId);
+      }
+    }).catch((error) => {
+      console.error("[activator] Reconcile failed", { serviceId, error });
+    });
+  }
+}
+
+export interface ActivatorControlOptions {
+  ensureServiceAwake: (serviceId: string) => Promise<number[]>;
+}
+
+/** Wakes the service, then returns its container IPs, one per line. */
+async function activate(
+  serviceId: string,
+  options: ActivatorControlOptions,
+): Promise<string[]> {
+  await options.ensureServiceAwake(serviceId);
+  const target = await getActivatorTarget(serviceId);
+  const firstContainer = target?.containerIds[0];
+  if (!target || !firstContainer) {
+    throw new Error("Service has no running deployment");
+  }
+  const network = await getContainerNetwork(firstContainer);
+  return Promise.all(
+    target.containerIds.map((id) => getContainerIp(id, network)),
+  );
+}
+
+export function createActivatorControlServer(
+  options: ActivatorControlOptions,
+): Server {
+  const server = createServer(async function onRequest(req, res) {
+    const match = req.url?.match(/^\/activate\/([A-Za-z0-9_-]+)$/);
+    const remote = req.socket.remoteAddress ?? "";
+    if (req.method !== "POST" || !match) {
+      res.writeHead(404).end();
+      return;
+    }
+    const serviceId = match[1];
+    const token = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+    if (!isPrivateAddress(remote) || !isValidActivatorToken(serviceId, token)) {
+      res.writeHead(403).end();
+      return;
+    }
+    try {
+      const ips = await activate(serviceId, options);
+      const body = `${ips.join("\n")}\n`;
+      res.writeHead(200, {
+        "content-type": "text/plain",
+        "content-length": Buffer.byteLength(body),
+      });
+      res.end(body);
+    } catch (error) {
+      console.error("[activator] Activation failed", { serviceId, error });
+      res.writeHead(503).end();
+    }
+  });
+  server.requestTimeout = 0;
+  return server;
+}
+
+const globalForActivator = globalThis as typeof globalThis & {
+  frostActivatorControlServer?: Server;
+};
+
+export function startActivatorControlServer(
+  options: ActivatorControlOptions,
+): Promise<number> {
+  const port = getActivatorControlPort();
+  if (globalForActivator.frostActivatorControlServer) {
+    return Promise.resolve(port);
+  }
+  const server = createActivatorControlServer(options);
+  globalForActivator.frostActivatorControlServer = server;
+  return new Promise((resolve, reject) => {
+    server.once("error", (error) => {
+      globalForActivator.frostActivatorControlServer = undefined;
+      reject(error);
+    });
+    // Containers reach the host through their network's gateway address, so
+    // this can't be loopback-only; requests need a per-service token and a
+    // private source address.
+    server.listen(port, process.env.FROST_ACTIVATOR_HOST || "0.0.0.0", () =>
+      resolve(port),
+    );
+  });
+}
