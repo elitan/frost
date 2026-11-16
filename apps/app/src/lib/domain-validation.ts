@@ -1,6 +1,8 @@
 import psl from "psl";
 
 export const DOMAIN_NAME_ERROR = "Enter a valid domain like vattensvar.se.";
+export const SUBDOMAIN_ERROR =
+  "Use lowercase letters, numbers and hyphens (max 63 characters).";
 
 const DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -19,6 +21,10 @@ export function isValidDomainName(domain: string): boolean {
       return DNS_LABEL_PATTERN.test(label);
     })
   );
+}
+
+export function isValidSubdomainLabel(label: string): boolean {
+  return DNS_LABEL_PATTERN.test(label);
 }
 
 export function getDomainNameValidationError(domain: string): string | null {

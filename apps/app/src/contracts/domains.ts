@@ -55,6 +55,14 @@ export const domainsContract = {
     .input(
       z.object({
         id: z.string(),
+        subdomain: z
+          .string()
+          .trim()
+          .toLowerCase()
+          .optional()
+          .describe(
+            "New first label for an auto-generated (wildcard) domain, e.g. `api` for api.example.com",
+          ),
         type: z.enum(["proxy", "redirect"]).optional(),
         redirectTarget: domainNameSchema.optional(),
         redirectCode: z.union([z.literal(301), z.literal(307)]).optional(),

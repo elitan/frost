@@ -9,6 +9,7 @@ import {
   Copy,
   ExternalLink,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -34,6 +35,7 @@ import {
   useAddDomain,
   useDeleteDomain,
   useDomains,
+  useUpdateDomain,
   useVerifyDomainDns,
   useVerifyDomainSsl,
 } from "@/hooks/use-domains";
@@ -41,7 +43,9 @@ import type { Domain } from "@/lib/api";
 import { extractSubdomain } from "@/lib/domain-utils";
 import {
   getDomainNameValidationError,
+  isValidSubdomainLabel,
   normalizeDomainName,
+  SUBDOMAIN_ERROR,
 } from "@/lib/domain-validation";
 import { copyText } from "@/lib/utils";
 
@@ -79,6 +83,7 @@ export function DomainsSection({
   const { data: domains, isLoading } = useDomains(serviceId);
   const addMutation = useAddDomain(serviceId);
   const deleteMutation = useDeleteDomain(serviceId);
+  const updateMutation = useUpdateDomain(serviceId);
   const verifyDnsMutation = useVerifyDomainDns(serviceId);
   const verifySslMutation = useVerifyDomainSsl(serviceId);
 
@@ -273,6 +278,23 @@ export function DomainsSection({
       setDomainToDelete(null);
     } catch {
       toast.error("Failed to remove domain");
+    }
+  }
+
+  async function handleRenameSystemDomain(
+    id: string,
+    subdomain: string,
+  ): Promise<boolean> {
+    try {
+      const updated = await updateMutation.mutateAsync({
+        id,
+        data: { subdomain },
+      });
+      toast.success(`Domain changed to ${updated.domain}`);
+      return true;
+    } catch (err: any) {
+      toast.error(err.message || "Failed to change domain");
+      return false;
     }
   }
 
@@ -476,6 +498,10 @@ export function DomainsSection({
                 onVerify={() => handleVerifyDns(domain.id)}
                 onDelete={() => handleDelete(domain)}
                 onRetrySsl={() => handleRetrySsl(domain.id)}
+                onRename={(subdomain) =>
+                  handleRenameSystemDomain(domain.id, subdomain)
+                }
+                isRenaming={updateMutation.isPending}
                 isVerifying={verifyDnsMutation.isPending}
                 canDelete={hasOtherVerifiedDomains}
                 verificationState={verificationState.get(domain.id)}
@@ -555,6 +581,8 @@ interface DomainRowProps {
   onVerify: () => void;
   onDelete: () => void;
   onRetrySsl: () => void;
+  onRename?: (subdomain: string) => Promise<boolean>;
+  isRenaming?: boolean;
   isVerifying: boolean;
   canDelete: boolean;
   verificationState?: VerificationState;
@@ -697,30 +725,46 @@ function DomainRow({
   onVerify,
   onDelete,
   onRetrySsl,
+  onRename,
+  isRenaming = false,
   isVerifying,
   canDelete,
   verificationState,
 }: DomainRowProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const isVerified = Boolean(domain.dnsVerified);
   const isActive = domain.sslStatus === "active";
   const isFailed = domain.sslStatus === "failed";
   const isSystem = Boolean(domain.isSystem);
   const subdomain = extractSubdomain(domain.domain);
 
+  if (isEditing && onRename) {
+    return (
+      <SubdomainEditor
+        domain={domain.domain}
+        isSaving={isRenaming}
+        onCancel={() => setIsEditing(false)}
+        onSave={async (subdomain) => {
+          if (await onRename(subdomain)) setIsEditing(false);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="rounded-md border border-neutral-800">
-      <div className="flex items-center justify-between p-3">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-2 p-3">
+        <div className="flex min-w-0 items-center gap-3">
           {isVerified ? (
             <CheckCircle2 className="h-4 w-4 text-green-500" />
           ) : (
             <AlertTriangle className="h-4 w-4 text-yellow-500" />
           )}
-          <div>
-            <div className="flex items-center gap-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               {domain.type === "redirect" ? (
-                <span className="flex items-center gap-1 text-sm text-neutral-300">
+                <span className="flex min-w-0 flex-wrap items-center gap-1 break-all text-sm text-neutral-300">
                   {domain.domain}
                   <ArrowRight className="h-3 w-3 text-neutral-500" />
                   <span className="text-neutral-400">
@@ -732,13 +776,15 @@ function DomainRow({
                   href={`https://${domain.domain}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-sm text-white hover:text-blue-400"
+                  className="flex min-w-0 items-center gap-1 break-all text-sm text-white hover:text-blue-400"
                 >
                   {domain.domain}
                   <ExternalLink className="h-3 w-3" />
                 </a>
               ) : (
-                <span className="text-sm text-white">{domain.domain}</span>
+                <span className="break-all text-sm text-white">
+                  {domain.domain}
+                </span>
               )}
               {isSystem && (
                 <Badge
@@ -749,7 +795,7 @@ function DomainRow({
                 </Badge>
               )}
             </div>
-            <div className="mt-1 flex items-center gap-2">
+            <div className="mt-1 flex flex-wrap items-center gap-2">
               <DomainStatusDisplay
                 isVerified={isVerified}
                 isActive={isActive}
@@ -772,7 +818,18 @@ function DomainRow({
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+          {isSystem && onRename && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsEditing(true)}
+              title="Change subdomain"
+              aria-label="Change subdomain"
+            >
+              <Pencil className="h-4 w-4 text-neutral-500" />
+            </Button>
+          )}
           {!isSystem && !isVerified && (
             <Button
               variant="outline"
@@ -785,8 +842,8 @@ function DomainRow({
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <>
-                  <RefreshCw className="mr-1 h-3 w-3" />
-                  Refresh
+                  <RefreshCw className="h-3 w-3 sm:mr-1" />
+                  <span className="max-sm:sr-only">Refresh</span>
                 </>
               )}
             </Button>
@@ -844,5 +901,93 @@ function DomainRow({
         </div>
       )}
     </div>
+  );
+}
+
+interface SubdomainEditorProps {
+  domain: string;
+  isSaving: boolean;
+  onCancel: () => void;
+  onSave: (subdomain: string) => void;
+}
+
+function SubdomainEditor({
+  domain,
+  isSaving,
+  onCancel,
+  onSave,
+}: SubdomainEditorProps) {
+  const dot = domain.indexOf(".");
+  const suffix = dot === -1 ? "" : domain.slice(dot);
+  const [value, setValue] = useState(
+    dot === -1 ? domain : domain.slice(0, dot),
+  );
+  const normalized = value.trim().toLowerCase();
+  const error =
+    normalized.length > 0 && !isValidSubdomainLabel(normalized)
+      ? SUBDOMAIN_ERROR
+      : null;
+  const unchanged = `${normalized}${suffix}` === domain;
+
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!normalized || error || unchanged) return;
+    onSave(normalized);
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="rounded-md border border-neutral-800 p-3"
+    >
+      <label
+        htmlFor="system-subdomain"
+        className="text-xs font-medium text-neutral-400"
+      >
+        Subdomain
+      </label>
+      <div className="mt-1.5 flex items-center rounded-md border border-neutral-700 bg-neutral-900 focus-within:ring-1 focus-within:ring-neutral-500">
+        <Input
+          id="system-subdomain"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onCancel();
+          }}
+          autoFocus
+          spellCheck={false}
+          autoComplete="off"
+          aria-invalid={Boolean(error)}
+          className="h-9 min-w-0 flex-1 border-0 bg-transparent text-white focus-visible:ring-0"
+        />
+        <span className="shrink-0 truncate pr-3 text-sm text-neutral-500 max-sm:max-w-[45%]">
+          {suffix}
+        </span>
+      </div>
+      {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+      <p className="mt-2 text-xs text-neutral-500">
+        The old address stops working right away. Redirects that pointed to it
+        are updated.
+      </p>
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onCancel}
+          className="border-neutral-700 text-neutral-300"
+        >
+          Cancel
+        </Button>
+        <Button
+          type="submit"
+          size="sm"
+          disabled={isSaving || !normalized || Boolean(error) || unchanged}
+        >
+          {isSaving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+          Save
+        </Button>
+      </div>
+    </form>
   );
 }

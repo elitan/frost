@@ -2,13 +2,19 @@ import https from "node:https";
 import { ORPCError } from "@orpc/server";
 import { getSetting } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { normalizeDomainName } from "@/lib/domain-validation";
+import {
+  isValidDomainName,
+  isValidSubdomainLabel,
+  normalizeDomainName,
+  SUBDOMAIN_ERROR,
+} from "@/lib/domain-validation";
 import {
   addDomain,
   getDomain,
   getDomainByName,
   getDomainsForService,
   removeDomain,
+  retargetRedirects,
   syncCaddyConfig,
   updateDomain,
   verifyDomainDns,
@@ -54,6 +60,44 @@ async function assertNotFrostDomain(domain: string) {
       message: "This domain is used by the Frost dashboard",
     });
   }
+}
+
+/**
+ * Returns the new full name for an auto-generated domain whose first label
+ * becomes `subdomain`. The wildcard base (everything after the first label)
+ * stays the same.
+ */
+async function resolveSystemDomainRename(
+  domain: { id: string; domain: string; isSystem: boolean | number | null },
+  subdomain: string,
+): Promise<string> {
+  if (!domain.isSystem) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Only auto-generated domains can change their subdomain",
+    });
+  }
+  if (!isValidSubdomainLabel(subdomain)) {
+    throw new ORPCError("BAD_REQUEST", { message: SUBDOMAIN_ERROR });
+  }
+
+  const dot = domain.domain.indexOf(".");
+  if (dot === -1) {
+    throw new ORPCError("BAD_REQUEST", { message: "Invalid system domain" });
+  }
+  const nextDomain = `${subdomain}${domain.domain.slice(dot)}`;
+  if (nextDomain === domain.domain) {
+    return nextDomain;
+  }
+  if (!isValidDomainName(nextDomain)) {
+    throw new ORPCError("BAD_REQUEST", { message: SUBDOMAIN_ERROR });
+  }
+
+  const existing = await getDomainByName(nextDomain);
+  if (existing && existing.id !== domain.id) {
+    throw new ORPCError("CONFLICT", { message: "Domain already exists" });
+  }
+  await assertNotFrostDomain(nextDomain);
+  return nextDomain;
 }
 
 export const domains = {
@@ -146,8 +190,21 @@ export const domains = {
       throw new ORPCError("NOT_FOUND", { message: "Domain not found" });
     }
 
-    const nextType = input.type ?? domain.type;
     const updates: Parameters<typeof updateDomain>[1] = {};
+    let renamedFrom: string | null = null;
+
+    if (input.subdomain !== undefined) {
+      const nextDomain = await resolveSystemDomainRename(
+        domain,
+        input.subdomain,
+      );
+      if (nextDomain !== domain.domain) {
+        updates.domain = nextDomain;
+        renamedFrom = domain.domain;
+      }
+    }
+
+    const nextType = input.type ?? domain.type;
     if (input.type !== undefined) updates.type = input.type;
 
     if (nextType === "proxy") {
@@ -159,7 +216,7 @@ export const domains = {
           message: "redirectTarget is required for redirect type",
         });
       }
-      if (nextTarget === domain.domain) {
+      if (nextTarget === (updates.domain ?? domain.domain)) {
         throw new ORPCError("BAD_REQUEST", {
           message: "A domain cannot redirect to itself",
         });
@@ -169,6 +226,10 @@ export const domains = {
     }
 
     const updated = await updateDomain(input.id, updates);
+
+    if (renamedFrom && updates.domain) {
+      await retargetRedirects(renamedFrom, updates.domain);
+    }
 
     if (domain.dnsVerified) {
       try {

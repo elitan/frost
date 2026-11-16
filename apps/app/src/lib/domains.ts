@@ -92,6 +92,7 @@ export async function getDomainsForService(serviceId: string) {
 export async function updateDomain(
   id: string,
   updates: Partial<{
+    domain: string;
     type: "proxy" | "redirect";
     redirectTarget: string | null;
     redirectCode: 301 | 307;
@@ -101,6 +102,7 @@ export async function updateDomain(
 ) {
   const setValues: Record<string, unknown> = {};
 
+  if (updates.domain !== undefined) setValues.domain = updates.domain;
   if (updates.type !== undefined) setValues.type = updates.type;
   if (updates.redirectTarget !== undefined)
     setValues.redirectTarget = updates.redirectTarget;
@@ -123,6 +125,16 @@ export async function updateDomain(
     throw new Error("Domain not found after update");
   }
   return result;
+}
+
+/** Points redirect domains that targeted `from` at `to` instead. */
+export async function retargetRedirects(from: string, to: string) {
+  await db
+    .updateTable("domains")
+    .set({ redirectTarget: to })
+    .where("type", "=", "redirect")
+    .where("redirectTarget", "=", from)
+    .execute();
 }
 
 export async function removeDomain(id: string) {
