@@ -27,7 +27,13 @@ interface DatabaseTargetGatewayEntry {
   activeConnections: number;
 }
 
-const gatewayEntries = new Map<string, DatabaseTargetGatewayEntry>();
+// On globalThis so every module instance (instrumentation vs route handlers)
+// sees the same listening gateways.
+const globalForGateways = globalThis as typeof globalThis & {
+  frostDatabaseGatewayEntries?: Map<string, DatabaseTargetGatewayEntry>;
+};
+globalForGateways.frostDatabaseGatewayEntries ??= new Map();
+const gatewayEntries = globalForGateways.frostDatabaseGatewayEntries;
 
 function withTimeout<T>(
   input: Promise<T>,

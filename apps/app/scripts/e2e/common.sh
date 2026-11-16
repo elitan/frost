@@ -366,3 +366,30 @@ fail() {
 pass() {
   log "PASS"
 }
+
+# The wake proxy image Frost uses: FROST_ACTIVATOR_IMAGE, else what a source
+# install wrote to /opt/frost/.env. Prints nothing if it isn't available.
+find_activator_image() {
+  local IMAGE="${FROST_ACTIVATOR_IMAGE:-}"
+  if [ -z "$IMAGE" ]; then
+    IMAGE=$(remote "grep -s '^FROST_ACTIVATOR_IMAGE=' /opt/frost/.env | tail -n 1 | cut -d= -f2-" || true)
+  fi
+  if [ -n "$IMAGE" ] && remote "docker image inspect '$IMAGE' > /dev/null 2>&1"; then
+    echo "$IMAGE"
+  fi
+}
+
+# Skips the group when no wake proxy image is available, or fails it when
+# E2E_REQUIRE_ACTIVATOR=1 (CI builds the image, so it must run there).
+require_activator_image() {
+  ACTIVATOR_IMAGE=$(find_activator_image)
+  if [ -n "$ACTIVATOR_IMAGE" ]; then
+    return 0
+  fi
+  if [ "${E2E_REQUIRE_ACTIVATOR:-}" = "1" ]; then
+    fail "Wake proxy image not available (E2E_REQUIRE_ACTIVATOR=1)"
+  fi
+  log "Wake proxy image not available; skipping (build apps/activator first)"
+  pass
+  exit 0
+}

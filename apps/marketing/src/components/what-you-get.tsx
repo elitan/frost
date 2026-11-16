@@ -52,7 +52,8 @@ const features = [
   {
     icon: Moon,
     title: "Scale to Zero",
-    description: "Idle services sleep. The next request wakes them up.",
+    description:
+      "Idle services and databases sleep. The next request wakes them up.",
   },
 ];
 

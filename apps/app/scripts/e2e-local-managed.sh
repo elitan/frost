@@ -8,8 +8,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PORT="${FROST_PORT:-3301}"
 # Separate from a dev server's default wake port so both can run at once.
 WAKE_PORT="${FROST_WAKE_PORT:-3391}"
+ACTIVATOR_PORT="${FROST_ACTIVATOR_PORT:-3491}"
 # Faster scale-to-zero checks so the idle-sleep e2e finishes quickly.
 SCALE_TO_ZERO_INTERVAL_MS="${FROST_SCALE_TO_ZERO_INTERVAL_MS:-5000}"
+DATABASE_POLICY_INTERVAL_MS="${FROST_DATABASE_POLICY_INTERVAL_MS:-5000}"
+# Locally built wake proxy (apps/activator/build.sh); groups needing it skip
+# when it's missing.
+export FROST_ACTIVATOR_IMAGE="${FROST_ACTIVATOR_IMAGE:-frost-activator:dev}"
 BATCH_SIZE="${1:-${E2E_BATCH_SIZE:-2}}"
 DEV_LOG="${E2E_DEV_LOG:-/tmp/frost-dev.log}"
 JWT_SECRET="${FROST_JWT_SECRET:-frost-e2e-$(openssl rand -hex 24)}"
@@ -40,7 +45,7 @@ cleanup() {
   fi
 
   if [ "$KILL_STALE_PORT" = "1" ] && command -v lsof > /dev/null 2>&1; then
-    PORT_PIDS="$(lsof -ti tcp:"$PORT" 2>/dev/null || true)"
+    PORT_PIDS="$(lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
     if [ -n "$PORT_PIDS" ]; then
       kill $PORT_PIDS > /dev/null 2>&1 || true
     fi
@@ -66,12 +71,12 @@ for cmd in curl docker git jq openssl bun; do
 done
 
 if [ "$KILL_STALE_PORT" = "1" ] && command -v lsof > /dev/null 2>&1; then
-  STALE_PIDS="$(lsof -ti tcp:"$PORT" 2>/dev/null || true)"
+  STALE_PIDS="$(lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
   if [ -n "$STALE_PIDS" ]; then
     echo "Port $PORT already in use; terminating stale process(es): $STALE_PIDS"
     kill $STALE_PIDS > /dev/null 2>&1 || true
     sleep 1
-    STALE_PIDS="$(lsof -ti tcp:"$PORT" 2>/dev/null || true)"
+    STALE_PIDS="$(lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
     if [ -n "$STALE_PIDS" ]; then
       kill -9 $STALE_PIDS > /dev/null 2>&1 || true
       sleep 1
@@ -119,7 +124,10 @@ echo "Starting local Frost dev server..."
     FROST_JWT_SECRET="$JWT_SECRET" \
     FROST_SETUP_TOKEN="$SETUP_TOKEN" \
     FROST_WAKE_PORT="$WAKE_PORT" \
+    FROST_ACTIVATOR_PORT="$ACTIVATOR_PORT" \
     FROST_SCALE_TO_ZERO_INTERVAL_MS="$SCALE_TO_ZERO_INTERVAL_MS" \
+    FROST_DATABASE_POLICY_INTERVAL_MS="$DATABASE_POLICY_INTERVAL_MS" \
+    FROST_ACTIVATOR_IMAGE="$FROST_ACTIVATOR_IMAGE" \
     bun --bun next dev -p "$PORT"
 ) > "$DEV_LOG" 2>&1 &
 DEV_PID=$!

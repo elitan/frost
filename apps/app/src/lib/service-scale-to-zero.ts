@@ -7,6 +7,10 @@ import {
 } from "./docker";
 import { syncCaddyConfig as syncCaddyConfigDefault } from "./domains";
 import { withLock } from "./keyed-lock";
+import {
+  reconcileServiceActivators as reconcileServiceActivatorsDefault,
+  startServiceActivator as startServiceActivatorDefault,
+} from "./service-activator";
 
 const DEFAULT_CHECK_INTERVAL_MS = 30_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 30;
@@ -45,6 +49,8 @@ interface Deps {
   stopContainer: (containerId: string, timeoutSeconds: number) => Promise<void>;
   waitForHealthy: typeof waitForHealthyDefault;
   syncCaddyConfig: () => Promise<unknown>;
+  startActivator: (serviceId: string) => Promise<void>;
+  reconcileActivators: () => Promise<void>;
 }
 
 const defaultDeps: Deps = {
@@ -54,6 +60,13 @@ const defaultDeps: Deps = {
   stopContainer: stopContainerDefault,
   waitForHealthy: waitForHealthyDefault,
   syncCaddyConfig: syncCaddyConfigDefault,
+  startActivator: startServiceActivatorDefault,
+  reconcileActivators: () =>
+    reconcileServiceActivatorsDefault(
+      function withServiceLock(serviceId, task) {
+        return withLock(lockKey(serviceId), task);
+      },
+    ),
 };
 
 let deps: Deps = defaultDeps;
@@ -324,6 +337,16 @@ export async function sleepService(
       }
     }
     lastNetworkBytes.delete(service.deploymentId);
+    // A stand-in under the service's internal hostname so
+    // connections from other services wake it too.
+    try {
+      await deps.startActivator(serviceId);
+    } catch (error) {
+      console.error("[scale-to-zero] Failed to start activator", {
+        serviceId,
+        error,
+      });
+    }
     console.log(`[scale-to-zero] Service ${serviceId} is now sleeping`);
     return true;
   });
@@ -490,6 +513,12 @@ export async function runScaleToZeroTick(): Promise<{ slept: string[] }> {
         error,
       });
     }
+  }
+
+  try {
+    await deps.reconcileActivators();
+  } catch (error) {
+    console.error("[scale-to-zero] Activator reconcile failed", error);
   }
 
   return { slept };

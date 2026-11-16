@@ -237,6 +237,9 @@ jobs:
         env:
           E2E_BRANCH: ${{ github.head_ref || github.ref_name }}
           E2E_BATCH_SIZE: 4
+          # install.sh builds the wake proxy from this branch; its groups
+          # must run, not skip.
+          E2E_REQUIRE_ACTIVATOR: "1"
         run: |
           set -o pipefail
           ./apps/app/scripts/e2e-test.sh 127.0.0.1 "${{ steps.install.outputs.api_key }}" 2>&1 | tee /tmp/e2e-tests.log

@@ -81,6 +81,29 @@ export async function register() {
     startFrostBackupScheduler();
     console.log("[startup] frost database backup scheduler: started");
 
+    // Before the schedulers: they start wake proxies, which need it.
+    const { startScaleToZeroScheduler, ensureServiceAwake } = await import(
+      "./lib/service-scale-to-zero"
+    );
+    const { startActivatorControlServer } = await import(
+      "./lib/service-activator"
+    );
+    const { wakeDatabaseTargetForProxy } = await import(
+      "./lib/database-runtime"
+    );
+    try {
+      const endpoint = await startActivatorControlServer({
+        ensureServiceAwake,
+        wakeDatabaseTarget: wakeDatabaseTargetForProxy,
+      });
+      console.log(
+        `[startup] activator control: listening on ${endpoint.bindHost}:${endpoint.port}`,
+      );
+    } catch (err) {
+      // Services then wake only through their domains, and databases sleep
+      // without a proxy (as before internal wake existed).
+      console.error("[startup] activator control: failed to start", err);
+    }
     const { restoreDatabaseTargetGateways } = await import(
       "./lib/database-runtime"
     );
@@ -103,9 +126,6 @@ export async function register() {
       console.error("[startup] service wake server: failed to start", err);
     }
 
-    const { startScaleToZeroScheduler } = await import(
-      "./lib/service-scale-to-zero"
-    );
     startScaleToZeroScheduler();
     console.log("[startup] scale-to-zero scheduler: started");
 

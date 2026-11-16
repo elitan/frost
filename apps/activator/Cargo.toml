@@ -1,0 +1,16 @@
+[package]
+name = "frost-activator"
+version = "0.1.0"
+edition = "2021"
+description = "Stand-in for a sleeping Frost service: holds connections, wakes the service, then forwards them."
+license = "MIT"
+
+# Standard library only: no third-party crates.
+[dependencies]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

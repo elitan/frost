@@ -15,9 +15,37 @@ The first request after a sleep waits for the cold start: container start plus h
 
 A sleeping service shows as **sleeping** in the dashboard. Click **Wake now** to start it without sending a request.
 
+## Postgres databases
+
+Postgres branches, including `main`, can scale to zero too. It's off by default; set the idle minutes in the branch's settings.
+
+A sleeping database wakes on any connection: from your services over the project network (`<db>.frost.internal`) or on its public port. The first connection waits for the database to start, typically a few seconds.
+
+A small proxy runs in front of the database while scale to zero is on. It holds connections while the database starts and passes traffic through untouched, TLS included. It uses about 1 MB of memory, plus roughly 90 KB per open connection, and adds well under a millisecond per query.
+
+A database counts as in use, and stays awake, while:
+
+- any query is running or a transaction is open, however long it takes
+- a client sent or received anything in the last N minutes, including short-lived connections
+
+Idle connections in a pool don't keep it awake. When a database sleeps, Frost closes them; most pools notice and open a new connection for the next query:
+
+| Client | Behavior after a sleep |
+|-------|------------------------|
+| node-postgres (`pg`) Pool, postgres.js, pgx (Go) | Next query succeeds. With `pg`, add a `pool.on("error")` handler (you need one anyway) |
+| SQLAlchemy | Set `pool_pre_ping=True`, otherwise the first query after a sleep fails once |
+| Django | Set `CONN_HEALTH_CHECKS = True` if you use persistent connections |
+| One connection per request | Nothing to do |
+
+`LISTEN`/`NOTIFY` listeners are disconnected when the database sleeps; reconnect and listen again on error.
+
+With scale to zero on, a branch you stop by hand also starts again on the next connection. Turning scale to zero off starts a sleeping branch.
+
+The proxy reaches Frost on port 3091 of the Docker bridge (e.g. `172.17.0.1`). Frost checks this at startup. If a host firewall blocks traffic from containers to the host, Frost logs which port to allow and runs without the proxy: databases still sleep, but wake only on their public port.
+
 ## Limitations
 
-- Only requests to the service's **domains** wake it. Requests from other services over the project network, or straight to its host port, do not. Set internal-only services (e.g. an API only other services call) and background workers to **Always on**.
+- Only requests to an app service's **domains** wake it. Requests from other services over the project network, or straight to its host port, do not. Set internal-only services (e.g. an API only other services call) and background workers to **Always on**. (Postgres databases are different, see above.)
 - Any network traffic counts as activity, including outbound calls the app makes itself. A service that polls something every few minutes will never sleep.
 - Long-lived connections (WebSockets) are closed when the service sleeps. A connection that stays open through the wake proxy keeps it awake.
 - Volumes are kept while a service sleeps.

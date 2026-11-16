@@ -6,6 +6,10 @@ import {
   buildDatabaseTargetContainerName,
   buildPostgresTlsProbeArgs,
   getRuntimePortBinding,
+  isTargetIdleEnough,
+  parsePostgresActivity,
+  parseProxyIdleSeconds,
+  usesDatabaseProxy,
 } from "./database-runtime";
 
 describe("buildDatabaseTargetContainerName", function describeContainerName() {
@@ -94,5 +98,79 @@ describe("buildPostgresTlsProbeArgs", function describeTlsProbe() {
     expect(args.some((arg) => arg.includes("host.docker.internal"))).toBe(
       false,
     );
+  });
+});
+
+describe("scale-to-zero idle checks", function describeIdleChecks() {
+  test("parses pg_stat_activity output", function testParseActivity() {
+    expect(parsePostgresActivity("0,-1\n")).toEqual({
+      busy: 0,
+      idleSeconds: null,
+    });
+    expect(parsePostgresActivity("2,17")).toEqual({ busy: 2, idleSeconds: 17 });
+    expect(() => parsePostgresActivity("psql: error")).toThrow();
+  });
+
+  test("parses the proxy's idle seconds", function testParseProxyIdle() {
+    expect(
+      parseProxyIdleSeconds(
+        "ok phase=awake forwarding=3 held=0 touched=false idle_secs=42",
+      ),
+    ).toBe(42);
+    expect(parseProxyIdleSeconds("busy")).toBeNull();
+  });
+
+  test("busy sessions, recent queries or recent traffic keep a target awake", function testIdleEnough() {
+    const idle = { busy: 0, idleSeconds: 600 };
+    expect(
+      isTargetIdleEnough({
+        activity: idle,
+        proxyIdleSeconds: 600,
+        minIdleSeconds: 300,
+      }),
+    ).toBe(true);
+    expect(
+      isTargetIdleEnough({
+        activity: { busy: 0, idleSeconds: null },
+        proxyIdleSeconds: null,
+        minIdleSeconds: 300,
+      }),
+    ).toBe(true);
+    // An open transaction or running query, however old.
+    expect(
+      isTargetIdleEnough({
+        activity: { busy: 1, idleSeconds: 9999 },
+        proxyIdleSeconds: 9999,
+        minIdleSeconds: 300,
+      }),
+    ).toBe(false);
+    // A pooled connection queried recently.
+    expect(
+      isTargetIdleEnough({
+        activity: { busy: 0, idleSeconds: 10 },
+        proxyIdleSeconds: 600,
+        minIdleSeconds: 300,
+      }),
+    ).toBe(false);
+    // Short-lived connections leave no session behind, only proxy traffic.
+    expect(
+      isTargetIdleEnough({
+        activity: { busy: 0, idleSeconds: null },
+        proxyIdleSeconds: 5,
+        minIdleSeconds: 300,
+      }),
+    ).toBe(false);
+  });
+
+  test("only scale-to-zero postgres targets use the proxy", function testUsesProxy() {
+    expect(
+      usesDatabaseProxy({ engine: "postgres" }, { scaleToZeroMinutes: 5 }),
+    ).toBe(true);
+    expect(
+      usesDatabaseProxy({ engine: "postgres" }, { scaleToZeroMinutes: null }),
+    ).toBe(false);
+    expect(
+      usesDatabaseProxy({ engine: "mysql" }, { scaleToZeroMinutes: 5 }),
+    ).toBe(false);
   });
 });

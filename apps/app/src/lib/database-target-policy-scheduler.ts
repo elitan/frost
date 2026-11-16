@@ -1,13 +1,20 @@
 import {
   deleteDatabaseTargetUnlocked,
-  stopDatabaseTargetUnlocked,
+  reconcileDatabaseProxies,
+  sleepIdleDatabaseTargetUnlocked,
   withDatabaseTargetLock,
 } from "./database-runtime";
 import { getDatabaseTargetGatewayActiveConnections } from "./database-target-gateway";
 import type { DatabaseTargetStoppedReason } from "./database-target-status";
 import { db } from "./db";
 
-const CHECK_INTERVAL_MS = 60_000;
+function getCheckIntervalMs(): number {
+  const value = Number.parseInt(
+    process.env.FROST_DATABASE_POLICY_INTERVAL_MS ?? "",
+    10,
+  );
+  return Number.isInteger(value) && value >= 1000 ? value : 60_000;
+}
 
 let intervalId: ReturnType<typeof setInterval> | null = null;
 let tickInFlight = false;
@@ -50,7 +57,10 @@ type DatabaseTargetPolicySchedulerInput = {
   ) => Promise<ScaleToZeroTarget | null>;
   getTtlTarget?: (targetId: string) => Promise<TtlTarget | null>;
   getActiveConnections?: (targetId: string) => number;
-  /** Called while holding the target lock. */
+  /**
+   * Called while holding the target lock. The default re-checks real usage
+   * (proxy traffic, Postgres sessions) and may decide to stay awake.
+   */
   stopTarget?: (input: StopTargetInput) => Promise<unknown>;
   /** Called while holding the target lock. */
   deleteTarget?: (input: DeleteTargetInput) => Promise<unknown>;
@@ -94,7 +104,6 @@ function scaleToZeroTargetsQuery() {
       "databaseTargets.scaleToZeroMinutes",
     ])
     .where("databaseTargets.kind", "=", "branch")
-    .where("databaseTargets.name", "!=", "main")
     .where("databaseTargets.lifecycleStatus", "=", "active")
     .where("databaseTargets.scaleToZeroMinutes", "is not", null)
     .where("databases.engine", "=", "postgres");
@@ -200,7 +209,7 @@ async function runScaleToZeroPolicy(
   const reloadTarget = input.getScaleToZeroTarget ?? getScaleToZeroTarget;
   const getActiveConnections =
     input.getActiveConnections ?? getDatabaseTargetGatewayActiveConnections;
-  const stopTarget = input.stopTarget ?? stopDatabaseTargetUnlocked;
+  const stopTarget = input.stopTarget ?? sleepIdleDatabaseTargetUnlocked;
   const withTargetLock = input.withTargetLock ?? withDatabaseTargetLock;
   const onError = input.logAutoStopError ?? logAutoStopError;
 
@@ -288,6 +297,10 @@ function checkAndRun(): void {
   }
   tickInFlight = true;
   runDatabaseTargetPolicyScheduler()
+    .then(function reconcileProxies() {
+      // Restores proxies lost to a reboot or crash, drops stale ones.
+      return reconcileDatabaseProxies();
+    })
     .catch(function onError(error) {
       console.error("[database-target-policy-scheduler] Error:", error);
     })
@@ -301,7 +314,7 @@ export function startDatabaseTargetPolicyScheduler(): void {
     return;
   }
 
-  intervalId = setInterval(checkAndRun, CHECK_INTERVAL_MS);
+  intervalId = setInterval(checkAndRun, getCheckIntervalMs());
   checkAndRun();
   console.log("[database-target-policy-scheduler] Started");
 }

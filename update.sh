@@ -361,6 +361,37 @@ ensure_zfs_branching_setup() {
 }
 
 
+# Wake proxy for scale to zero (internal wake, Postgres). Release tarballs
+# ship static binaries (activator/<arch>/); source checkouts build it from
+# apps/activator. Either way the image is built locally, nothing is pulled.
+# Not fatal: without it Frost runs without wake proxies (services wake through
+# their domains, Postgres branches sleep without a proxy). Keep in sync with
+# install.sh.
+ensure_activator_image() {
+  local env_file="$FROST_DIR/.env"
+  local arch
+  case "$(uname -m)" in
+    x86_64) arch="amd64" ;;
+    aarch64 | arm64) arch="arm64" ;;
+    *) arch="" ;;
+  esac
+  sed -i '/^FROST_ACTIVATOR_IMAGE=frost-activator:source$/d' "$env_file" 2>/dev/null || true
+  if [ -f "$FROST_DIR/apps/activator/Dockerfile" ]; then
+    if docker build -q -t frost-activator:source "$FROST_DIR/apps/activator" > /dev/null; then
+      echo "FROST_ACTIVATOR_IMAGE=frost-activator:source" >> "$env_file"
+      return 0
+    fi
+  elif [ -n "$arch" ] && [ -x "$FROST_DIR/activator/$arch/frost-activator" ]; then
+    local version
+    version=$(grep '"version"' "$FROST_DIR/package.json" 2>/dev/null | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+    # Frost uses frost-activator:<its version> by default.
+    if docker build -q -f "$FROST_DIR/activator/Dockerfile" -t "frost-activator:$version" "$FROST_DIR/activator/$arch" > /dev/null; then
+      return 0
+    fi
+  fi
+  log "Warning: no wake proxy image; scale to zero runs without internal wake"
+}
+
 get_package_version() {
   local file="$1"
   grep '"version"' "$file" 2>/dev/null | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/'
@@ -1090,6 +1121,9 @@ else
 
   NEW_VERSION=$(get_package_version package.json)
 fi
+
+log "Preparing the wake proxy image..."
+ensure_activator_image
 
 log "Backing up SQLite database..."
 backup_sqlite_db
