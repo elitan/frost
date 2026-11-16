@@ -32,9 +32,12 @@ export function useUpdateDomain(serviceId: string) {
       id: string;
       data: Omit<ContractInputs["domains"]["update"], "id">;
     }) => orpc.domains.update.call({ id, ...data }),
-    onSuccess: async () => {
+    onSuccess: async (_data, variables) => {
+      // A subdomain change renames the domain, which other lists also show.
       await queryClient.refetchQueries({
-        queryKey: orpc.domains.listByService.key({ input: { serviceId } }),
+        queryKey: variables.data.subdomain
+          ? orpc.domains.key()
+          : orpc.domains.listByService.key({ input: { serviceId } }),
       });
     },
   });

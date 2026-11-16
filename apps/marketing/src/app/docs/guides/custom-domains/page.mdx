@@ -13,3 +13,16 @@ Connect your domain to a Frost service.
 **Proxy** - Routes traffic to your service.
 
 **Redirect** - Redirects to another URL (301 or 307).
+
+## Auto-generated Domains
+
+With a wildcard domain configured in Settings → Domain, each service gets an address like `api-myproject.apps.example.com`.
+
+To change it, click the pencil icon next to the domain in Service → Domains and enter a new subdomain. The old address stops working right away, and redirect domains that pointed to it follow the new name. Over the API:
+
+```bash
+curl -X PATCH https://frost.example.com/api/domains/{id} \
+  -H "X-Frost-Token: $FROST_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"subdomain":"api"}'
+```
