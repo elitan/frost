@@ -357,9 +357,13 @@ export default function DatabaseBranchesPage() {
                 <thead>
                   <tr className="border-b border-neutral-800 text-neutral-500">
                     <th className="px-4 py-3 font-medium">Name</th>
-                    <th className="px-4 py-3 font-medium">Parent</th>
+                    <th className="hidden px-4 py-3 font-medium sm:table-cell">
+                      Parent
+                    </th>
                     <th className="px-4 py-3 font-medium">Status</th>
-                    <th className="px-4 py-3 font-medium">Created</th>
+                    <th className="hidden px-4 py-3 font-medium md:table-cell">
+                      Created
+                    </th>
                     <th className="px-4 py-3 font-medium" />
                   </tr>
                 </thead>
@@ -412,7 +416,7 @@ export default function DatabaseBranchesPage() {
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-neutral-400">
+                        <td className="hidden px-4 py-3 text-neutral-400 sm:table-cell">
                           {row.parentName ?? "-"}
                         </td>
                         <td className="px-4 py-3">
@@ -427,7 +431,7 @@ export default function DatabaseBranchesPage() {
                             ) : null}
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-neutral-400">
+                        <td className="hidden whitespace-nowrap px-4 py-3 text-neutral-400 md:table-cell">
                           {formatDate(row.target.createdAt)}
                         </td>
                         <td className="px-4 py-3 text-right">

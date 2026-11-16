@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/select";
 import type { ContractOutputs } from "@/contracts";
 import { useRunDatabaseTargetSql } from "@/hooks/use-databases";
+import { cn } from "@/lib/utils";
 import {
   buildTableCountQuery,
   buildTableRowsQuery,
@@ -592,6 +593,13 @@ export function DatabaseTableBrowser({
   const runSqlAsyncRef = useRef(runSqlMutation.mutateAsync);
   const [tables, setTables] = useState<DatabaseTableItem[]>([]);
   const [selectedTableKey, setSelectedTableKey] = useState<string | null>(null);
+  // Overlapping loadTables calls must compare against the latest selection,
+  // not a stale closure, or they re-select the same table and leave the
+  // data pane stuck on "Loading table...".
+  const selectedTableKeyRef = useRef<string | null>(null);
+  selectedTableKeyRef.current = selectedTableKey;
+  // Below md only one pane fits; track which one is visible.
+  const [mobilePane, setMobilePane] = useState<"list" | "data">("list");
   const [columns, setColumns] = useState<DatabaseTableColumn[]>([]);
   const [rows, setRows] = useState<DatabaseTableRow[]>([]);
   const [page, setPage] = useState(0);
@@ -805,15 +813,16 @@ export function DatabaseTableBrowser({
 
   const selectTableKey = useCallback(
     function selectTableKey(nextTableKey: string) {
-      if (nextTableKey === selectedTableKey) {
+      if (nextTableKey === selectedTableKeyRef.current) {
         return;
       }
+      selectedTableKeyRef.current = nextTableKey;
       resetActiveTableView();
       setErrorText(null);
       setIsWaitingForTableData(true);
       setSelectedTableKey(nextTableKey);
     },
-    [resetActiveTableView, selectedTableKey],
+    [resetActiveTableView],
   );
 
   const loadTables = useCallback(
@@ -835,12 +844,14 @@ export function DatabaseTableBrowser({
         setTables(nextTables);
         if (nextTables.length === 0) {
           resetActiveTableView();
+          selectedTableKeyRef.current = null;
           setSelectedTableKey(null);
           return;
         }
 
+        const currentSelectedTableKey = selectedTableKeyRef.current;
         const preferredSelectedTableKey =
-          options?.preferredSelectedTableKey ?? selectedTableKey;
+          options?.preferredSelectedTableKey ?? currentSelectedTableKey;
         const hasPreferredSelection = nextTables.some(function hasTable(table) {
           return table.key === preferredSelectedTableKey;
         });
@@ -848,7 +859,7 @@ export function DatabaseTableBrowser({
           ? (preferredSelectedTableKey ?? nextTables[0].key)
           : nextTables[0].key;
 
-        if (nextSelectedTableKey !== selectedTableKey) {
+        if (nextSelectedTableKey !== currentSelectedTableKey) {
           selectTableKey(nextSelectedTableKey);
         } else if (options?.reloadSelectedTableData) {
           setMetadataReloadKey(function incrementReloadKey(current) {
@@ -862,7 +873,7 @@ export function DatabaseTableBrowser({
         setIsLoadingTables(false);
       }
     },
-    [resetActiveTableView, runSql, selectTableKey, selectedTableKey],
+    [resetActiveTableView, runSql, selectTableKey],
   );
 
   const loadSelectedTableData = useCallback(
@@ -978,6 +989,7 @@ export function DatabaseTableBrowser({
       if (!targetId || !isBranchActive) {
         setTables([]);
         resetActiveTableView();
+        selectedTableKeyRef.current = null;
         setSelectedTableKey(null);
         setErrorText(null);
         setCreateTableName("");
@@ -1356,7 +1368,12 @@ export function DatabaseTableBrowser({
   return (
     <>
       <div className="flex min-h-0 min-w-0 w-full flex-1 gap-4 overflow-hidden">
-        <Card className="w-72 min-h-0 border-neutral-800 bg-neutral-900">
+        <Card
+          className={cn(
+            "min-h-0 w-full border-neutral-800 bg-neutral-900 md:w-72 md:shrink-0",
+            mobilePane === "data" && "max-md:hidden",
+          )}
+        >
           <CardContent className="flex h-full min-h-0 flex-col p-0">
             <div className="space-y-3 border-b border-neutral-800 p-3">
               <div className="flex items-center justify-between">
@@ -1416,6 +1433,7 @@ export function DatabaseTableBrowser({
                         key={table.key}
                         onClick={() => {
                           selectTableKey(table.key);
+                          setMobilePane("data");
                         }}
                         className={
                           selected
@@ -1438,14 +1456,30 @@ export function DatabaseTableBrowser({
           </CardContent>
         </Card>
 
-        <Card className="min-h-0 min-w-0 flex-1 border-neutral-800 bg-neutral-900">
+        <Card
+          className={cn(
+            "min-h-0 min-w-0 flex-1 border-neutral-800 bg-neutral-900",
+            mobilePane === "list" && "max-md:hidden",
+          )}
+        >
           <CardContent className="flex h-full min-h-0 min-w-0 flex-col p-0">
             <div className="space-y-3 border-b border-neutral-800 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-1 h-7 px-1.5 text-neutral-400 md:hidden"
+                  onClick={() => {
+                    setMobilePane("list");
+                  }}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Tables
+                </Button>
                 {selectedTable ? (
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <Database className="h-4 w-4 text-neutral-400" />
-                    <span className="font-mono text-sm text-neutral-100">
+                    <span className="truncate font-mono text-sm text-neutral-100">
                       {selectedTable.schema}.{selectedTable.name}
                     </span>
                     <Badge
@@ -1494,7 +1528,7 @@ export function DatabaseTableBrowser({
             <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
               {!selectedTable ? (
                 <div className="flex h-full items-center justify-center text-sm text-neutral-500">
-                  Pick a table from the left.
+                  Pick a table from the list.
                 </div>
               ) : shouldShowTableLoadingState ? (
                 <div className="flex h-full items-center justify-center gap-2 text-sm text-neutral-500">
