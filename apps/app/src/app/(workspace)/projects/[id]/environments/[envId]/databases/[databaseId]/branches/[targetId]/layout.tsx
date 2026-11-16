@@ -66,10 +66,12 @@ export default function DatabaseBranchDetailLayout({
   const branchId = params.targetId as string;
   const branchBasePath = `/projects/${projectId}/environments/${envId}/databases/${databaseId}/branches/${branchId}`;
 
-  const { data: database } = useDatabase(databaseId);
-  const { data: targets = [] } = useDatabaseTargets(databaseId, {
-    refetchInterval: 5000,
-  });
+  const { data: database, isLoading: isDatabaseLoading } =
+    useDatabase(databaseId);
+  const { data: targets = [], isLoading: isTargetsLoading } =
+    useDatabaseTargets(databaseId, {
+      refetchInterval: 5000,
+    });
 
   const startTargetMutation = useStartDatabaseTarget(databaseId);
   const deployTargetMutation = useDeployDatabaseTarget(databaseId, branchId);
@@ -124,6 +126,9 @@ export default function DatabaseBranchDetailLayout({
   }
 
   if (!database || !branch) {
+    if (isDatabaseLoading || isTargetsLoading) {
+      return null;
+    }
     return (
       <Card className="border-neutral-800 bg-neutral-900">
         <CardContent className="space-y-4 py-8 text-center">

@@ -43,19 +43,22 @@ export function ScaleToZeroCard({ serviceId }: ScaleToZeroCardProps) {
 
   useEffect(() => {
     if (service) {
-      const current = service.scaleToZeroMinutes?.toString() ?? "off";
+      const current = service.scaleToZeroMinutes
+        ? service.scaleToZeroMinutes.toString()
+        : "off";
       setValue(current);
       initialValue.current = current;
     }
   }, [service]);
 
   const hasChanges = value !== initialValue.current;
-  const options = SCALE_TO_ZERO_OPTIONS.some((opt) => opt.value === value)
-    ? SCALE_TO_ZERO_OPTIONS
-    : [
-        ...SCALE_TO_ZERO_OPTIONS,
-        { value, label: `After ${value} minutes idle` },
-      ];
+  const options =
+    value === "" || SCALE_TO_ZERO_OPTIONS.some((opt) => opt.value === value)
+      ? SCALE_TO_ZERO_OPTIONS
+      : [
+          ...SCALE_TO_ZERO_OPTIONS,
+          { value, label: `After ${value} minutes idle` },
+        ];
 
   async function handleSave() {
     try {
@@ -97,7 +100,13 @@ export function ScaleToZeroCard({ serviceId }: ScaleToZeroCardProps) {
         </Button>
       }
     >
-      <Select value={value} onValueChange={setValue}>
+      <Select
+        value={value}
+        onValueChange={function onValueChange(next) {
+          // Radix can emit "" (e.g. on form reset); an empty item value throws.
+          if (next) setValue(next);
+        }}
+      >
         <SelectTrigger className="w-56">
           <SelectValue />
         </SelectTrigger>
