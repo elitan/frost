@@ -49,7 +49,12 @@ export function CommandPaletteTrigger({
       <span className={cn("flex-1 text-left", compact && "sr-only")}>
         Search…
       </span>
-      <kbd className="pointer-events-none rounded border border-neutral-800 bg-neutral-950 px-1.5 py-px font-sans text-[10px] font-medium text-neutral-500 group-hover:text-neutral-400">
+      <kbd
+        className={cn(
+          "pointer-events-none rounded border border-neutral-800 bg-neutral-950 px-1.5 py-px font-sans text-[10px] font-medium text-neutral-500 group-hover:text-neutral-400",
+          compact && "max-md:hidden",
+        )}
+      >
         {modifier}K
       </kbd>
     </button>

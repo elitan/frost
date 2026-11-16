@@ -80,9 +80,9 @@ export function SettingCard({
 
   const cardContent = (
     <>
-      <div className="p-6">
-        <div className="flex items-start justify-between">
-          <div>
+      <div className="p-4 sm:p-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
             <h2
               className={`text-xl font-semibold ${isDanger ? "text-red-400" : "text-white"}`}
             >
@@ -92,12 +92,12 @@ export function SettingCard({
               <p className="mt-2 text-sm text-neutral-400">{description}</p>
             )}
           </div>
-          {headerAction && <div>{headerAction}</div>}
+          {headerAction && <div className="shrink-0">{headerAction}</div>}
         </div>
-        <div className="mt-6">{children}</div>
+        <div className="mt-4 min-w-0 sm:mt-6">{children}</div>
       </div>
       {hasFooter && (
-        <div className="flex items-center justify-between border-t border-neutral-800 px-6 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-800 px-4 py-3 sm:px-6">
           {learnMoreUrl ? (
             <a
               href={learnMoreUrl}
@@ -113,7 +113,7 @@ export function SettingCard({
           ) : (
             <div />
           )}
-          {rightContent && <div>{rightContent}</div>}
+          {rightContent && <div className="ml-auto">{rightContent}</div>}
         </div>
       )}
     </>

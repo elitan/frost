@@ -216,21 +216,26 @@ export function DatabaseBranchPanel({
     queryFn: () => api.health.hostResources(),
   });
 
+  const currentBranchId = branch?.id ?? null;
+  const currentBranchName = branch?.name ?? null;
+
+  // Keyed on id/name only: `branch` is a new object on every refetch, and
+  // depending on it would wipe the SQL editor and results every few seconds.
   useEffect(
     function resetTabOnBranchChange() {
-      if (!branch) {
+      if (currentBranchId === null || currentBranchName === null) {
         return;
       }
       setActiveSettingsTab("general");
       setResetDialogOpen(false);
       setDeleteDialogOpen(false);
-      setDraftBranchName(branch.name);
-      setDraftHostname(branch.name);
+      setDraftBranchName(currentBranchName);
+      setDraftHostname(currentBranchName);
       setSqlInput("select now();");
       setSqlResult(null);
       setSqlError(null);
     },
-    [branch?.id, branch],
+    [currentBranchId, currentBranchName],
   );
 
   useEffect(
@@ -838,7 +843,7 @@ export function DatabaseBranchPanel({
                                   {sqlResult.columns.map((columnName) => (
                                     <th
                                       key={columnName}
-                                      className="px-3 py-2 font-medium text-neutral-400"
+                                      className="whitespace-nowrap px-3 py-2 font-medium text-neutral-400"
                                     >
                                       {columnName}
                                     </th>
@@ -867,7 +872,8 @@ export function DatabaseBranchPanel({
                                           return (
                                             <td
                                               key={`${sqlResult.executedAt}-${rowIndex}-${columnName}`}
-                                              className="px-3 py-2 text-neutral-200"
+                                              className="max-w-xs truncate whitespace-nowrap px-3 py-2 text-neutral-200"
+                                              title={value}
                                             >
                                               {value.length > 0 ? value : " "}
                                             </td>
@@ -899,14 +905,14 @@ export function DatabaseBranchPanel({
 
             {activeTab === "settings" && (
               <div className="mx-auto w-full max-w-[1200px]">
-                <div className="flex gap-6">
-                  <nav className="sticky top-0 self-start w-32 shrink-0 space-y-0.5">
+                <div className="flex flex-col gap-4 md:flex-row md:gap-6">
+                  <nav className="flex flex-wrap gap-1 md:sticky md:top-0 md:block md:w-32 md:shrink-0 md:space-y-0.5 md:self-start">
                     {BRANCH_SETTINGS_NAV_ITEMS.map((item) => (
                       <button
                         type="button"
                         key={item.id}
                         onClick={() => setActiveSettingsTab(item.id)}
-                        className="relative block w-full rounded-md px-3 py-2 text-left text-sm transition-colors"
+                        className="relative block shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition-colors md:w-full"
                       >
                         {activeSettingsTab === item.id && (
                           <motion.div
@@ -932,7 +938,7 @@ export function DatabaseBranchPanel({
                     ))}
                   </nav>
 
-                  <div className="flex-1 space-y-4">
+                  <div className="min-w-0 flex-1 space-y-4">
                     {activeSettingsTab === "general" && (
                       <>
                         <SettingCard

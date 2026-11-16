@@ -3,6 +3,7 @@
 import { X } from "lucide-react";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
+import { MobileNavTrigger } from "@/components/mobile-nav";
 import { StateTabs } from "@/components/state-tabs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -117,11 +118,14 @@ export function ResourceSidebar<T extends string>({
       )}
     >
       <div className="flex h-14 flex-row items-center justify-between border-b border-neutral-800 px-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-neutral-800 text-neutral-400">
+        <div className="flex min-w-0 items-center gap-3">
+          <MobileNavTrigger className="-mr-1" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-neutral-800 text-neutral-400">
             {icon}
           </div>
-          <h2 className="text-lg font-semibold text-neutral-200">{title}</h2>
+          <h2 className="truncate text-lg font-semibold text-neutral-200">
+            {title}
+          </h2>
         </div>
         <Button
           variant="ghost"
@@ -144,7 +148,7 @@ export function ResourceSidebar<T extends string>({
         />
         <div
           ref={contentRef}
-          className="flex min-h-0 flex-1 flex-col overflow-auto p-4 [scrollbar-gutter:stable]"
+          className="flex min-h-0 flex-1 flex-col overflow-auto p-3 sm:p-4 [scrollbar-gutter:stable]"
         >
           {contentMode === "center" ? (
             <div className="mx-auto w-full max-w-[1200px]">{children}</div>

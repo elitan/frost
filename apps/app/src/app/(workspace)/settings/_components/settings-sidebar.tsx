@@ -105,7 +105,7 @@ export function SettingsSidebar({ activeSection }: SettingsSidebarProps) {
 
 export function SettingsMobileTabs({ activeSection }: SettingsSidebarProps) {
   return (
-    <nav aria-label="Settings" className="flex gap-1 overflow-x-auto pb-4">
+    <nav aria-label="Settings" className="flex flex-wrap gap-1">
       {NAV_ITEMS.map((item) => {
         const isActive =
           activeSection === item.id ||

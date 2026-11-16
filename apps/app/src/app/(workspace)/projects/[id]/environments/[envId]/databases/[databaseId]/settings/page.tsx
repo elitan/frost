@@ -102,8 +102,8 @@ export default function DatabaseSettingsPage() {
   }
 
   return (
-    <div className="flex gap-6">
-      <nav className="sticky top-0 self-start w-32 shrink-0 space-y-0.5">
+    <div className="flex flex-col gap-4 md:flex-row md:gap-6">
+      <nav className="flex flex-wrap gap-1 md:sticky md:top-0 md:block md:w-32 md:shrink-0 md:space-y-0.5 md:self-start">
         {DATABASE_SETTINGS_NAV_ITEMS.map(function renderNavItem(item) {
           const isActive = activeTab === item.id;
           return (
@@ -115,8 +115,8 @@ export default function DatabaseSettingsPage() {
               }}
               className={
                 isActive
-                  ? "block w-full rounded-md bg-neutral-800/80 px-3 py-2 text-left text-sm text-white"
-                  : "block w-full rounded-md px-3 py-2 text-left text-sm text-neutral-400 transition-colors hover:text-neutral-200"
+                  ? "block shrink-0 whitespace-nowrap rounded-md bg-neutral-800/80 px-3 py-2 text-left text-sm text-white md:w-full"
+                  : "block shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm text-neutral-400 transition-colors hover:text-neutral-200 md:w-full"
               }
             >
               {item.label}
@@ -125,7 +125,7 @@ export default function DatabaseSettingsPage() {
         })}
       </nav>
 
-      <div className="flex-1 space-y-6">
+      <div className="min-w-0 flex-1 space-y-6">
         {activeTab === "general" && (
           <>
             <SettingCard

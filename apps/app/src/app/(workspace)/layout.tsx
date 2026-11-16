@@ -10,6 +10,7 @@ import {
   CommandPaletteTrigger,
 } from "@/components/command-palette";
 import { MainContentHeader } from "@/components/main-content-header";
+import { MobileNav } from "@/components/mobile-nav";
 import { ShellTopRow } from "@/components/shell-top-row";
 import {
   ProjectSidebarSkeleton,
@@ -81,6 +82,7 @@ export default function WorkspaceLayout({
 
   const [createServiceModalOpen, setCreateServiceModalOpen] = useState(false);
   const [createEnvDialogOpen, setCreateEnvDialogOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   const { data: environments = [], isLoading: isEnvironmentsLoading } =
     useQuery({
@@ -288,11 +290,12 @@ export default function WorkspaceLayout({
     "min-h-0 min-w-0 flex-1",
     isResourceDetailPage
       ? "overflow-hidden bg-neutral-950/20"
-      : "overflow-auto p-6",
+      : "overflow-auto p-4 md:p-6",
   );
 
   const openCreateEnvironmentDialog = useCallback(
     function openCreateEnvironmentDialog() {
+      setMobileNavOpen(false);
       setCreateEnvDialogOpen(true);
     },
     [],
@@ -306,6 +309,7 @@ export default function WorkspaceLayout({
     function getCreateServiceModalContextValue() {
       return {
         openCreateServiceModal: function openCreateServiceModal() {
+          setMobileNavOpen(false);
           setCreateServiceModalOpen(true);
         },
       };
@@ -317,49 +321,57 @@ export default function WorkspaceLayout({
     <CommandPaletteProvider>
       <CreateServiceModalProvider value={createServiceModalContextValue}>
         <main className="fixed inset-0 flex min-h-0">
-          {isProjectPage ? (
-            isEnvironmentsLoading ? (
-              <ProjectSidebarSkeleton header={<SidebarBrandRow />} />
-            ) : (
-              <ProjectLeftMenu
-                projectId={projectId}
-                currentEnvId={currentEnvId}
-                selectedServiceId={selectedServiceId}
-                selectedDatabaseId={selectedDatabaseId}
-                selectedObjectStorageId={selectedObjectStorageId}
-                onOpenCreateService={function openCreateService() {
-                  createServiceModalContextValue.openCreateServiceModal();
-                }}
-                onOpenCreateEnvironment={function openCreateEnvironment() {
-                  setCreateEnvDialogOpen(true);
-                }}
-              />
-            )
-          ) : (
-            <WorkspaceLeftMenu />
-          )}
-
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-neutral-950/20">
-            {showMainContentHeader && (
-              <MainContentHeader
-                title={mainHeaderTitle}
-                actions={
-                  isProjectPage ? <CommandPaletteTrigger compact /> : undefined
-                }
-              />
-            )}
-            <div className={bodyClassName}>
-              {isProjectPage && isEnvironmentsLoading ? (
-                isResourceDetailPage ? null : (
-                  <ResourceGridSkeleton />
+          <MobileNav
+            open={mobileNavOpen}
+            onOpenChange={setMobileNavOpen}
+            sidebar={
+              isProjectPage ? (
+                isEnvironmentsLoading ? (
+                  <ProjectSidebarSkeleton header={<SidebarBrandRow />} />
+                ) : (
+                  <ProjectLeftMenu
+                    projectId={projectId}
+                    currentEnvId={currentEnvId}
+                    selectedServiceId={selectedServiceId}
+                    selectedDatabaseId={selectedDatabaseId}
+                    selectedObjectStorageId={selectedObjectStorageId}
+                    onOpenCreateService={function openCreateService() {
+                      createServiceModalContextValue.openCreateServiceModal();
+                    }}
+                    onOpenCreateEnvironment={openCreateEnvironmentDialog}
+                  />
                 )
-              ) : shouldCenterContent ? (
-                <div className="mx-auto w-full max-w-[1200px]">{children}</div>
               ) : (
-                children
+                <WorkspaceLeftMenu />
+              )
+            }
+          >
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-neutral-950/20">
+              {showMainContentHeader && (
+                <MainContentHeader
+                  title={mainHeaderTitle}
+                  actions={
+                    isProjectPage ? (
+                      <CommandPaletteTrigger compact />
+                    ) : undefined
+                  }
+                />
               )}
+              <div className={bodyClassName}>
+                {isProjectPage && isEnvironmentsLoading ? (
+                  isResourceDetailPage ? null : (
+                    <ResourceGridSkeleton />
+                  )
+                ) : shouldCenterContent ? (
+                  <div className="mx-auto w-full max-w-[1200px]">
+                    {children}
+                  </div>
+                ) : (
+                  children
+                )}
+              </div>
             </div>
-          </div>
+          </MobileNav>
         </main>
 
         {isProjectPage && currentEnvId && (

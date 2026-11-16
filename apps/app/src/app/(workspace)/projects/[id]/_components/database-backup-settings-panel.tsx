@@ -476,7 +476,7 @@ export function DatabaseBackupSettingsPanel({
           title="Backups"
           description="Configure branch backups to an S3-compatible bucket."
           footerRight={
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <Button
                 type="button"
                 variant="outline"

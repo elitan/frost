@@ -87,10 +87,10 @@ interface VariablesTabProps {
 
 function ReadOnlyVar({ name, value }: ReadOnlyVarProps) {
   return (
-    <div className="flex gap-2 font-mono text-sm">
+    <div className="flex flex-wrap gap-x-2 font-mono text-sm">
       <span className="text-neutral-400">{name}</span>
       <span className="text-neutral-600">=</span>
-      <span className="text-neutral-500">{value}</span>
+      <span className="min-w-0 break-all text-neutral-500">{value}</span>
     </div>
   );
 }
@@ -317,14 +317,14 @@ export function SidebarSettings({ service, projectId }: SidebarSettingsProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
 
   return (
-    <div className="flex gap-6">
-      <nav className="sticky top-0 self-start w-32 shrink-0 space-y-0.5">
+    <div className="flex flex-col gap-4 md:flex-row md:gap-6">
+      <nav className="flex flex-wrap gap-1 md:sticky md:top-0 md:block md:w-32 md:shrink-0 md:space-y-0.5 md:self-start">
         {NAV_ITEMS.map((item) => (
           <button
             type="button"
             key={item.id}
             onClick={() => setActiveTab(item.id)}
-            className="relative block w-full rounded-md px-3 py-2 text-left text-sm transition-colors"
+            className="relative block shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-left text-sm transition-colors md:w-full"
           >
             {activeTab === item.id && (
               <motion.div
@@ -346,7 +346,7 @@ export function SidebarSettings({ service, projectId }: SidebarSettingsProps) {
         ))}
       </nav>
 
-      <div className="flex-1 space-y-4">
+      <div className="min-w-0 flex-1 space-y-4">
         {activeTab === "general" && (
           <>
             <ServiceNameCard serviceId={service.id} />
