@@ -26,6 +26,11 @@ export function ProjectResourceBadges({
       <StatusBadge tone={getProjectResourceSummaryTone(resourceSummary)}>
         {resourceSummary.onlineCount}/{resourceSummary.totalCount} online
       </StatusBadge>
+      {resourceSummary.sleepingCount > 0 && (
+        <StatusBadge className="border-violet-800 bg-violet-900/30 text-violet-300">
+          {resourceSummary.sleepingCount} sleeping
+        </StatusBadge>
+      )}
       {resourceSummary.attentionCount > 0 && (
         <StatusBadge tone="warning">
           {resourceSummary.attentionCount} attention

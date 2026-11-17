@@ -22,8 +22,25 @@ describe("getProjectResourceSummary", () => {
       objectStorageCount: 1,
       totalCount: 4,
       onlineCount: 3,
+      sleepingCount: 0,
       attentionCount: 0,
     });
+  });
+});
+
+describe("getProjectResourceSummary sleeping", () => {
+  test("counts sleeping services separately from online", () => {
+    const summary = getProjectResourceSummary({
+      services: [
+        { runtimeStatus: "online", attentionStatus: null },
+        { runtimeStatus: "sleeping", attentionStatus: null },
+      ],
+      databases: [],
+    });
+
+    expect(summary.onlineCount).toBe(1);
+    expect(summary.sleepingCount).toBe(1);
+    expect(getProjectResourceSummaryTone(summary)).toBe("success");
   });
 });
 
@@ -36,6 +53,7 @@ describe("getProjectResourceSummaryTone", () => {
         objectStorageCount: 0,
         totalCount: 2,
         onlineCount: 2,
+        sleepingCount: 0,
         attentionCount: 0,
       }),
     ).toBe("success");
@@ -49,6 +67,7 @@ describe("getProjectResourceSummaryTone", () => {
         objectStorageCount: 0,
         totalCount: 2,
         onlineCount: 1,
+        sleepingCount: 0,
         attentionCount: 0,
       }),
     ).toBe("warning");
@@ -62,6 +81,7 @@ describe("getProjectResourceSummaryTone", () => {
         objectStorageCount: 0,
         totalCount: 2,
         onlineCount: 0,
+        sleepingCount: 0,
         attentionCount: 0,
       }),
     ).toBe("danger");
@@ -77,6 +97,7 @@ describe("formatProjectResourceBreakdown", () => {
         objectStorageCount: 1,
         totalCount: 3,
         onlineCount: 3,
+        sleepingCount: 0,
         attentionCount: 0,
       }),
     ).toBe("1 service, 1 database, 1 object storage");

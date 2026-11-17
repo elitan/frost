@@ -31,6 +31,7 @@ const projectResourceSummarySchema = z.object({
   objectStorageCount: z.number(),
   totalCount: z.number(),
   onlineCount: z.number(),
+  sleepingCount: z.number(),
   attentionCount: z.number(),
 });
 

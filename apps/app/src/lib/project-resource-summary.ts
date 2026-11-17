@@ -14,6 +14,8 @@ export interface ProjectResourceSummary {
   objectStorageCount: number;
   totalCount: number;
   onlineCount: number;
+  /** Scale-to-zero resources that are stopped and wake on traffic. */
+  sleepingCount: number;
   attentionCount: number;
 }
 
@@ -23,13 +25,12 @@ export type ProjectResourceSummaryTone =
   | "warning"
   | "danger";
 
-function countOnline(resources: ProjectResourceItem[]): number {
-  return resources.filter(function isOnline(resource) {
-    // Sleeping (scale-to-zero) services are healthy; they wake on traffic.
-    return (
-      resource.runtimeStatus === "online" ||
-      resource.runtimeStatus === "sleeping"
-    );
+function countByStatus(
+  resources: ProjectResourceItem[],
+  status: ServiceRuntimeStatus,
+): number {
+  return resources.filter(function hasStatus(resource) {
+    return resource.runtimeStatus === status;
   }).length;
 }
 
@@ -51,20 +52,20 @@ export function getProjectResourceSummary(input: {
   const serviceCount = input.services.length;
   const databaseCount = input.databases.length;
   const objectStorageCount = input.objectStorages?.length ?? 0;
+  const resources = [
+    ...input.services,
+    ...input.databases,
+    ...(input.objectStorages ?? []),
+  ];
 
   return {
     serviceCount,
     databaseCount,
     objectStorageCount,
     totalCount: serviceCount + databaseCount + objectStorageCount,
-    onlineCount:
-      countOnline(input.services) +
-      countOnline(input.databases) +
-      countOnline(input.objectStorages ?? []),
-    attentionCount:
-      countAttention(input.services) +
-      countAttention(input.databases) +
-      countAttention(input.objectStorages ?? []),
+    onlineCount: countByStatus(resources, "online"),
+    sleepingCount: countByStatus(resources, "sleeping"),
+    attentionCount: countAttention(resources),
   };
 }
 
@@ -75,14 +76,14 @@ export function getProjectResourceSummaryTone(
     return "neutral";
   }
 
-  if (
-    summary.onlineCount === summary.totalCount &&
-    summary.attentionCount === 0
-  ) {
+  // Sleeping (scale-to-zero) resources are healthy; they wake on traffic.
+  const healthyCount = summary.onlineCount + summary.sleepingCount;
+
+  if (healthyCount === summary.totalCount && summary.attentionCount === 0) {
     return "success";
   }
 
-  if (summary.onlineCount === 0) {
+  if (healthyCount === 0) {
     return "danger";
   }
 
