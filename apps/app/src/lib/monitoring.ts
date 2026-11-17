@@ -320,6 +320,7 @@ export async function getMetricsHistoryFromDb(
     .select((eb) => [
       "type",
       "containerId",
+      bucket.as("bucket"),
       eb.fn.max("serviceId").as("maxServiceId"),
       eb.fn.max("timestamp").as("lastTimestamp"),
       eb.fn.avg<number>("cpuPercent").as("avgCpuPercent"),
@@ -345,6 +346,7 @@ export async function getMetricsHistoryFromDb(
 
   const system: MetricsHistoryPoint[] = [];
   const containers: Record<string, MetricsHistoryPoint[]> = {};
+  const serviceBuckets = new Map<number, MetricsHistoryPoint>();
 
   for (const row of rows) {
     const cpuPercent = roundMetric(row.avgCpuPercent) ?? 0;
@@ -357,12 +359,7 @@ export async function getMetricsHistoryFromDb(
         diskPercent: roundMetric(row.avgDiskPercent) ?? undefined,
       });
     } else if (row.type === "container" && row.containerId) {
-      const key =
-        serviceId && row.maxServiceId ? row.maxServiceId : row.containerId;
-      if (!containers[key]) {
-        containers[key] = [];
-      }
-      containers[key].push({
+      const point: MetricsHistoryPoint = {
         timestamp: Number(row.lastTimestamp),
         cpuPercent,
         memoryPercent,
@@ -372,11 +369,58 @@ export async function getMetricsHistoryFromDb(
             : Math.round(Number(row.avgMemoryBytes)),
         containerId: row.containerId,
         serviceId: row.maxServiceId ?? undefined,
-      });
+      };
+
+      if (serviceId) {
+        addToServiceBucket(serviceBuckets, Number(row.bucket), point);
+        continue;
+      }
+
+      if (!containers[row.containerId]) {
+        containers[row.containerId] = [];
+      }
+      containers[row.containerId].push(point);
     }
   }
 
+  if (serviceId && serviceBuckets.size > 0) {
+    containers[serviceId] = Array.from(serviceBuckets.values())
+      .map(function roundPoint(p) {
+        return {
+          ...p,
+          cpuPercent: roundMetric(p.cpuPercent) ?? 0,
+          memoryPercent: roundMetric(p.memoryPercent) ?? 0,
+        };
+      })
+      .sort(function byTimestamp(a, b) {
+        return a.timestamp - b.timestamp;
+      });
+  }
+
   return { system, containers };
+}
+
+/**
+ * A service can have several containers in one bucket (replicas, or old and
+ * new containers overlapping during a redeploy). Sum them so the service
+ * series shows total usage instead of interleaved per-container points.
+ */
+function addToServiceBucket(
+  buckets: Map<number, MetricsHistoryPoint>,
+  bucket: number,
+  point: MetricsHistoryPoint,
+): void {
+  const existing = buckets.get(bucket);
+  if (!existing) {
+    buckets.set(bucket, { ...point, containerId: undefined });
+    return;
+  }
+  existing.timestamp = Math.max(existing.timestamp, point.timestamp);
+  existing.cpuPercent += point.cpuPercent;
+  existing.memoryPercent += point.memoryPercent;
+  if (point.memoryBytes !== undefined) {
+    existing.memoryBytes = (existing.memoryBytes ?? 0) + point.memoryBytes;
+  }
 }
 
 function roundMetric(value: number | string | null | undefined): number | null {

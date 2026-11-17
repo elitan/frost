@@ -198,6 +198,62 @@ describe("metrics history", function describeMetricsHistory() {
       await testDb.destroy();
     }
   });
+
+  test("sums multiple containers of a service per bucket", async function testServiceSum() {
+    const testDb = createTestDb();
+    const now = 100 * 24 * 60 * 60 * 1000;
+    const system = {
+      cpuPercent: 0,
+      cpuCores: 1,
+      memoryUsed: 1,
+      memoryTotal: 2,
+      memoryPercent: 50,
+      diskUsed: 1,
+      diskTotal: 2,
+      diskPercent: 50,
+    };
+    function container(id: string, memoryUsage: number) {
+      return {
+        containerId: id,
+        name: id,
+        cpuPercent: 5,
+        memoryUsage,
+        memoryLimit: 0,
+        memoryPercent: 1,
+        networkRx: 0,
+        networkTx: 0,
+        serviceId: "svc_1",
+      };
+    }
+    try {
+      for (let i = 0; i < 10; i += 1) {
+        await saveMetricsToDb(testDb, {
+          timestamp: now - i * 15_000,
+          system,
+          containers: [
+            container("aaaaaaaaaaaa", 100),
+            container("bbbbbbbbbbbb", 300),
+          ],
+        });
+      }
+
+      const history = await getMetricsHistoryFromDb(
+        testDb,
+        "1h",
+        "container",
+        "svc_1",
+        now,
+      );
+      const series = history.containers.svc_1;
+      expect(series.length).toBe(10);
+      for (const point of series) {
+        expect(point.memoryBytes).toBe(400);
+        expect(point.cpuPercent).toBe(10);
+      }
+    } finally {
+      await testDb.destroy();
+    }
+  });
 });
 
 describe("getHistoryBucketMs", () => {

@@ -32,12 +32,16 @@ function formatTooltipTime(label: unknown): string {
   return formatDateTime(Number(label));
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / k ** i).toFixed(1)} ${sizes[i]}`;
+const BYTES_PER_MB = 1024 * 1024;
+
+function formatMb(mb: number): string {
+  if (mb >= 100) return `${Math.round(mb)} MB`;
+  return `${mb.toFixed(1)} MB`;
+}
+
+function formatMbAxis(mb: number): string {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)}G`;
+  return `${Math.round(mb)}M`;
 }
 
 function getGradientId(prefix: string, runtimeServiceId: string): string {
@@ -60,11 +64,12 @@ export function RuntimeMetricsCard({
     value: p.cpuPercent,
   }));
 
-  const memoryData = containerHistory.map((p) => ({
-    timestamp: p.timestamp,
-    value: p.memoryPercent,
-    bytes: p.memoryBytes,
-  }));
+  const memoryData = containerHistory
+    .filter((p) => p.memoryBytes !== undefined)
+    .map((p) => ({
+      timestamp: p.timestamp,
+      value: (p.memoryBytes ?? 0) / BYTES_PER_MB,
+    }));
 
   const cpuGradientId = useMemo(
     function getCpuGradientId() {
@@ -223,12 +228,12 @@ export function RuntimeMetricsCard({
                       minTickGap={40}
                     />
                     <YAxis
-                      domain={[0, 100]}
+                      domain={[0, "auto"]}
                       tick={{ fill: "#737373", fontSize: 9 }}
                       axisLine={false}
                       tickLine={false}
-                      width={30}
-                      tickFormatter={(v) => `${v}%`}
+                      width={36}
+                      tickFormatter={formatMbAxis}
                     />
                     <Tooltip
                       contentStyle={{
@@ -239,14 +244,7 @@ export function RuntimeMetricsCard({
                       }}
                       labelStyle={{ color: "#a3a3a3" }}
                       labelFormatter={formatTooltipTime}
-                      formatter={(value, _name, props) => {
-                        const percent = `${Number(value).toFixed(1)}%`;
-                        const bytes = props.payload?.bytes;
-                        const label = bytes
-                          ? `${percent} (${formatBytes(bytes)})`
-                          : percent;
-                        return [label, "Memory"];
-                      }}
+                      formatter={(value) => [formatMb(Number(value)), "Memory"]}
                     />
                     <Area
                       type="monotone"
